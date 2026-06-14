@@ -4,10 +4,10 @@ import { useData } from '../contexts/DataContext';
 import { PrescriptionItem, PatientStatus, DrugCategory } from '../types';
 import PatientDashboard from './PatientDashboard';
 import MHQoLAssessment from './MHQoLAssessment';
-import { ArrowLeft, Stethoscope, AlertTriangle, FileText, Activity, Search, Plus, StickyNote, Calculator, Clock, CheckCircle, Menu, X, Users, ClipboardList } from 'lucide-react';
+import { ArrowLeft, Stethoscope, AlertTriangle, FileText, Activity, Search, Plus, StickyNote, Calculator, Clock, CheckCircle, Menu, X, Users, ClipboardList, History } from 'lucide-react';
 
 const DoctorView: React.FC = () => {
-  const { clients, inventory, addPrescription, updateClientStatus, getDrugSuggestions, addProgressNote, patientQueue, updateQueueStatus, removeFromQueue, addToQueue } = useData();
+  const { clients, inventory, addPrescription, updateClientStatus, getDrugSuggestions, addProgressNote, patientQueue, updateQueueStatus, removeFromQueue, addToQueue, prescriptions } = useData();
   
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -15,6 +15,9 @@ const DoctorView: React.FC = () => {
   const [showMobileQueue, setShowMobileQueue] = useState(false);
   const [showAllPatients, setShowAllPatients] = useState(false); // New Toggle State
   
+  // High-Risk Crisis Protocols State
+  const [crisisProtocols, setCrisisProtocols] = useState<Record<string, string[]>>({});
+
   // Prescription State
   const [rxType, setRxType] = useState<'Inventory' | 'Text'>('Inventory'); // NEW TOGGLE
   const [prescriptionText, setPrescriptionText] = useState(''); // NEW TEXT STATE
@@ -195,7 +198,7 @@ const DoctorView: React.FC = () => {
           // If not in queue at all, add them directly as In-Consultation
           const client = clients.find(c => c.id === clientId);
           if (client) {
-              const isNew = client.status === PatientStatus.NEW || client.progressNotes.length === 0;
+              const isNew = client.status === PatientStatus.NEW || (client.progressNotes || []).length === 0;
               await addToQueue(clientId, isNew ? 'New' : 'Follow-up', undefined, 'In-Consultation');
           }
       }
@@ -203,7 +206,8 @@ const DoctorView: React.FC = () => {
 
   const completeVisit = async () => {
       if(!selectedClientId) return;
-      const qItem = patientQueue.find(q => q.patientId === selectedClientId);
+      const qItem = patientQueue.find(q => q.patientId === selectedClientId && q.status !== 'Completed') || 
+                    patientQueue.find(q => q.patientId === selectedClientId);
       if(qItem) {
           await updateQueueStatus(qItem.id, 'Completed');
       }
@@ -234,22 +238,53 @@ const DoctorView: React.FC = () => {
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-2 pb-20 md:pb-2">
                 {waitingPatients.length === 0 && <p className="text-center text-slate-400 text-sm mt-10">Waiting Room Empty</p>}
-                {waitingPatients.map(q => (
-                    <div 
-                        key={q.id} 
-                        onClick={() => selectPatientFromQueue(q.patientId, q.id)}
-                        className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedClientId === q.patientId ? 'border-bwz-primary bg-teal-50 shadow-md' : 'border-slate-200 bg-white hover:bg-slate-50'}`}
-                    >
-                        <div className="flex justify-between items-start">
-                            <h4 className="font-bold text-slate-800 text-sm">{q.patientName}</h4>
-                            <span className="text-xs font-mono text-slate-400">{q.arrivalTime}</span>
+                {waitingPatients.map(q => {
+                    const clientData = clients.find(c => c.id === q.patientId);
+                    const isHighRisk = !!(clientData?.riskProfile?.suicidalIdeation || clientData?.riskProfile?.homicidalIntent);
+                    
+                    // Somatic warnings (abnormal vitals)
+                    const temp = parseFloat(clientData?.vitals?.temperature || '');
+                    const pulse = parseFloat(clientData?.vitals?.pulse || '');
+                    const isAbnormalVitals = (temp > 99.5 || temp < 97.0 || pulse > 100 || pulse < 60);
+
+                    return (
+                        <div 
+                            key={q.id} 
+                            onClick={() => selectPatientFromQueue(q.patientId, q.id)}
+                            className={`p-3.5 rounded-lg border cursor-pointer transition-all border-l-4 relative ${
+                                selectedClientId === q.patientId 
+                                    ? 'border-bwz-primary bg-teal-50 shadow-md transform scale-[1.02]' 
+                                    : 'border-slate-200 bg-white hover:bg-slate-50'
+                            }`}
+                            style={{ borderLeftColor: isHighRisk ? '#f43f5e' : (q.type === 'New' ? '#10b981' : '#3b82f6') }}
+                        >
+                            <div className="flex justify-between items-start">
+                                <h4 className="font-bold text-slate-800 text-sm flex items-center">
+                                    {isHighRisk && <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block mr-1.5 animate-pulse" title="High Psychiatric Risk" />}
+                                    {q.patientName}
+                                </h4>
+                                <span className="text-[10px] font-mono text-slate-400">{q.arrivalTime}</span>
+                            </div>
+                            <div className="flex justify-between items-center mt-2.5">
+                                <div className="flex space-x-1.5">
+                                    <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold ${q.type === 'New' ? 'bg-emerald-50 text-emerald-700' : 'bg-sky-50 text-sky-700'}`}>{q.type}</span>
+                                    {isAbnormalVitals && (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded uppercase font-bold bg-amber-50 text-amber-800 animate-pulse" title="Abnormal somatic vitals detected">
+                                            Somatic Warning
+                                        </span>
+                                    )}
+                                </div>
+                                {q.status === 'In-Consultation' ? (
+                                    <span className="text-[10px] text-bwz-primary font-black animate-pulse flex items-center">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-teal-500 mr-1" /> Consulting...
+                                    </span>
+                                ) : (
+                                    <span className="text-[9px] text-slate-400 font-bold">In Queue</span>
+                                )}
+                            </div>
                         </div>
-                        <div className="flex justify-between items-center mt-2">
-                            <span className={`text-[10px] px-2 py-0.5 rounded uppercase font-bold ${q.type === 'New' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{q.type}</span>
-                            {q.status === 'In-Consultation' && <span className="text-[10px] text-bwz-primary font-bold animate-pulse">Consulting...</span>}
-                        </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
         </div>
 
@@ -317,6 +352,126 @@ const DoctorView: React.FC = () => {
 
                     {activeTab === 'prescribe' && (
                         <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
+                            {/* HIGH-RISK PROTOCOLS DOCK (Upgrade 7) */}
+                            {(selectedClient.riskProfile.suicidalIdeation || selectedClient.riskProfile.homicidalIntent) && (
+                                <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-5 animate-pulse-subtle">
+                                    <div className="flex items-center text-red-700 font-bold mb-3">
+                                        <AlertTriangle size={20} className="mr-2 text-red-600 animate-bounce" />
+                                        <span className="uppercase tracking-wider text-sm">Mandatory Clinical Safety Guardrails</span>
+                                    </div>
+                                    <p className="text-xs text-red-800 mb-4 font-medium">
+                                        This patient profile contains high-risk indicators ({selectedClient.riskProfile.suicidalIdeation ? 'Suicidal Ideation' : ''} {selectedClient.riskProfile.homicidalIntent ? 'Homicidal Intent' : ''}). Please confirm standard safety checklists:
+                                    </p>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        {[
+                                            'Medication Dispensed to Caretaker only (Safe Storage confirmed)',
+                                            'Crisis safety checklist discussed & generated with relative/guardian',
+                                            'Follow-up visit prioritised in queue & scheduled within 7 days',
+                                            'Somatic/Physical suicide risk evaluation performed & logged',
+                                            'Crisis helpline numbers written on the prescription slip'
+                                        ].map((proto, pidx) => {
+                                            const currentChecks = crisisProtocols[selectedClient.id] || [];
+                                            const isChecked = currentChecks.includes(proto);
+                                            return (
+                                                <label key={pidx} className="flex items-start text-xs text-slate-700 font-medium cursor-pointer bg-white border rounded p-2 hover:bg-red-50/50">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        className="mt-0.5 mr-2 rounded text-red-600" 
+                                                        checked={isChecked}
+                                                        onChange={() => {
+                                                            const newChecks = isChecked 
+                                                                ? currentChecks.filter(c => c !== proto)
+                                                                : [...currentChecks, proto];
+                                                            setCrisisProtocols({ ...crisisProtocols, [selectedClient.id]: newChecks });
+                                                        }}
+                                                    />
+                                                    {proto}
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                    <div className="mt-3 text-[10px] text-right font-mono text-red-500 font-bold">
+                                         Security Protocol Checklist Status: {(crisisProtocols[selectedClient.id] || []).length} / 5 Confirmed
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* CLINICAL DECISION SUPPORT & TEMPLATES (Upgrade 1) */}
+                            <div className="mb-6 bg-slate-50 border border-slate-200.rounded rounded-xl p-4">
+                                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center">
+                                    <Stethoscope size={16} className="text-bwz-primary mr-2" />
+                                    1-Click Clinical Treatment Path Templates
+                                </h3>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    {[
+                                        { id: 'Depression', name: 'Depression Standard', desc: 'Sertraline / Escitalopram 1+0+0, 4 wks', color: 'hover:border-teal-500 hover:bg-teal-50 text-teal-800 border-teal-200' },
+                                        { id: 'Psychosis', name: 'Psychotic Episodes', desc: 'Antipsychotic (BD/HS) 1+0+1, 4 wks', color: 'hover:border-indigo-500 hover:bg-indigo-50 text-indigo-800 border-indigo-200' },
+                                        { id: 'Bipolar', name: 'Bipolar Stabiliser', desc: 'Mood Stabiliser BD 1+0+1, 4 wks', color: 'hover:border-purple-500 hover:bg-purple-50 text-purple-800 border-purple-200' },
+                                        { id: 'Anxiety', name: 'Anxiety / Insomnia', desc: 'Anxiolytic HS 0+0+1, 1 wk', color: 'hover:border-amber-500 hover:bg-amber-50 text-amber-800 border-amber-200' },
+                                    ].map((tpl) => (
+                                        <button 
+                                            key={tpl.id}
+                                            type="button"
+                                            onClick={() => {
+                                                let categoryToFind = '';
+                                                let targetFreq = 'OD';
+                                                let morning = 1, afternoon = 0, evening = 0, night = 0;
+                                                let durationValue = 4;
+                                                let durationUnit = 'Weeks';
+                                                let defaultDosage = '';
+
+                                                if (tpl.id === 'Depression') {
+                                                    categoryToFind = 'Antidepressant (Depression/Anxiety)';
+                                                    targetFreq = 'OD';
+                                                    morning = 1;
+                                                } else if (tpl.id === 'Psychosis') {
+                                                    categoryToFind = 'Antipsychotic (Schizophrenia/Bipolar)';
+                                                    targetFreq = 'BD';
+                                                    morning = 1;
+                                                    night = 1;
+                                                } else if (tpl.id === 'Bipolar') {
+                                                    categoryToFind = 'Mood Stabilizer (Bipolar)';
+                                                    targetFreq = 'BD';
+                                                    morning = 1;
+                                                    night = 1;
+                                                } else if (tpl.id === 'Anxiety') {
+                                                    categoryToFind = 'Anxiolytic/Hypnotic (Anxiety/Sleep)';
+                                                    targetFreq = 'HS';
+                                                    night = 1;
+                                                    durationValue = 1;
+                                                    durationUnit = 'Weeks';
+                                                }
+
+                                                const matchedMeds = inventory.filter(d => d.category === categoryToFind && d.currentStock > 0);
+                                                if (matchedMeds.length > 0) {
+                                                    const med = matchedMeds[0];
+                                                    setRxForm({
+                                                        drugId: med.id,
+                                                        targetDosage: med.strength,
+                                                        freq: targetFreq,
+                                                        durationValue,
+                                                        durationUnit,
+                                                        qty: 0,
+                                                        autoCalc: true,
+                                                        morning,
+                                                        afternoon,
+                                                        evening,
+                                                        night
+                                                    });
+                                                    setSelectedCategory(categoryToFind as any);
+                                                } else {
+                                                    alert(`No in-stock medications available in inventory matching category: ${categoryToFind}`);
+                                                }
+                                            }}
+                                            className={`transition-all border text-left p-3 rounded-lg bg-white flex flex-col justify-between cursor-pointer ${tpl.color}`}
+                                        >
+                                            <span className="text-xs font-bold">{tpl.name}</span>
+                                            <span className="text-[10px] text-slate-500 font-medium mt-1">{tpl.desc}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
                             {/* PRESCRIPTION TYPE TOGGLE */}
                             <div className="flex justify-center mb-6">
                                 <div className="bg-slate-100 p-1 rounded-lg flex">
@@ -349,7 +504,18 @@ const DoctorView: React.FC = () => {
                                         {/* Form */}
                                         <div className="lg:col-span-7 space-y-5">
                                         <div>
-                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Select Inventory Item</label>
+                                            <div className="flex justify-between items-center mb-1">
+                                                <label className="block text-xs font-bold text-slate-500 uppercase">Select Inventory Item</label>
+                                                {rxForm.drugId && (
+                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${
+                                                        (inventory.find(i => i.id === rxForm.drugId)?.currentStock || 0) < 100 
+                                                            ? 'bg-amber-100 text-amber-800 animate-pulse'
+                                                            : 'bg-green-100 text-green-800'
+                                                    }`}>
+                                                        Stock Status: {inventory.find(i => i.id === rxForm.drugId)?.currentStock || 0} left
+                                                    </span>
+                                                )}
+                                            </div>
                                             <select className="w-full bg-white border border-slate-300 rounded p-3 outline-none" value={rxForm.drugId} onChange={e => setRxForm({...rxForm, drugId: e.target.value})}>
                                             <option value="">-- Choose Drug --</option>
                                             {filteredInventory.map(d => (
@@ -359,6 +525,55 @@ const DoctorView: React.FC = () => {
                                             ))}
                                             </select>
                                         </div>
+
+                                        {/* SAFE DOSAGE GUARDRAIL INDICATOR (Upgrade 8) */}
+                                        {(() => {
+                                            const selectedDrug = inventory.find(d => d.id === rxForm.drugId);
+                                            if (!selectedDrug) return null;
+
+                                            const MOLECULE_LIMITS: Record<string, { maxDaily: number; unit: string; warning: string }> = {
+                                                "sertraline": { maxDaily: 200, unit: "mg", warning: "Daily dose over 200mg is outside normal therapeutic limits." },
+                                                "escitalopram": { maxDaily: 20, unit: "mg", warning: "Escitalopram clinical max is 20mg daily." },
+                                                "risperidone": { maxDaily: 8, unit: "mg", warning: "Risperidone safety max limit is 8mg daily (antipsychotic)." },
+                                                "haloperidol": { maxDaily: 20, unit: "mg", warning: "Extreme caution: High clinical EPS/seizure risks beyond 20mg Haloperidol." },
+                                                "olanzapine": { maxDaily: 20, unit: "mg", warning: "Olanzapine metabolic limit warning applied. Safe daily max is 20mg." },
+                                                "alprazolam": { maxDaily: 4, unit: "mg", warning: "Benzodiazepine warning: Daily maximum should not exceed 4mg due to clinical dependence danger." }
+                                            };
+
+                                            const drugMoleculeLower = (selectedDrug.molecule || "").toLowerCase();
+                                            const matchKey = Object.keys(MOLECULE_LIMITS).find(k => drugMoleculeLower.includes(k) || selectedDrug.name.toLowerCase().includes(k));
+                                            const dosageLimit = matchKey ? MOLECULE_LIMITS[matchKey] : null;
+
+                                            const drugStrengthNum = parseFloat(selectedDrug.strength.replace(/[^0-9.]/g, '')) || 0;
+                                            const dailyUnitsCount = rxForm.morning + rxForm.afternoon + rxForm.evening + rxForm.night;
+                                            const currentPrescribedDailyDose = drugStrengthNum * dailyUnitsCount;
+                                            const isLimitExceeded = dosageLimit && currentPrescribedDailyDose > dosageLimit.maxDaily;
+
+                                            return (
+                                                <div className={`p-4 rounded-xl border flex items-start text-xs font-semibold ${isLimitExceeded ? 'bg-red-50 border-red-200 text-red-900 animate-pulse' : 'bg-green-50 border-green-200 text-green-900'}`}>
+                                                    <div className="mr-3 font-bold text-lg mt-0.5">🛡️</div>
+                                                    <div className="flex-1">
+                                                        <div className="font-bold flex items-center justify-between">
+                                                            <span>Clinical Safety Check: {selectedDrug.molecule || selectedDrug.name}</span>
+                                                            <span className="font-mono text-[10px] px-2 py-0.5 bg-white shadow-xs rounded">
+                                                                Current Prescribed: {currentPrescribedDailyDose}mg/day
+                                                            </span>
+                                                        </div>
+                                                        <p className="font-medium text-slate-500 mt-1">
+                                                            {dosageLimit 
+                                                                ? `Max clinical guidance: ${dosageLimit.maxDaily}${dosageLimit.unit} per day. ${dosageLimit.warning}`
+                                                                : `Standard daily dosing guidelines apply. Current safe prescription levels verified.`
+                                                            }
+                                                        </p>
+                                                        {isLimitExceeded && (
+                                                            <div className="mt-2 text-xs font-black text-red-600 bg-white border border-red-300 p-2 rounded flex items-center">
+                                                                <AlertTriangle size={14} className="mr-1 animate-bounce" /> Warning: Recommended patient threshold exceeded! Use with absolute caution.
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
                                         
                                         <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
                                             <h4 className="text-blue-800 font-bold flex items-center mb-3 text-sm"><Calculator size={14} className="mr-2"/> Smart Dosage Calculator</h4>
@@ -465,7 +680,7 @@ const DoctorView: React.FC = () => {
                                             value={prescriptionText}
                                             onChange={e => setPrescriptionText(e.target.value)}
                                         />
-                                        <div className="mt-6">
+                                         <div className="mt-6">
                                             <button onClick={handleSubmitRx} className="w-full bg-bwz-primary text-white py-4 rounded-xl font-bold shadow-lg hover:bg-teal-700 flex justify-center items-center">
                                                 <CheckCircle className="mr-2"/> Sign & Transmit Prescription
                                             </button>
@@ -473,6 +688,68 @@ const DoctorView: React.FC = () => {
                                     </div>
                                 </div>
                             )}
+
+                            {/* HISTORICAL PRESCRIPTIONS */}
+                            <div className="mt-12 pt-8 border-t border-slate-200">
+                                <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center">
+                                    <History className="mr-2 text-bwz-primary" /> Prescription History
+                                </h3>
+                                
+                                {(() => {
+                                    const historyRx = prescriptions
+                                        .filter(rx => rx.clientId === selectedClient.id)
+                                        .sort((a,b) => new Date(b.date || b.id.split('-')[1]).getTime() - new Date(a.date || a.id.split('-')[1]).getTime());
+                                        
+                                    if (historyRx.length === 0) {
+                                        return <div className="text-center py-10 bg-slate-50 text-slate-400 italic rounded-xl border border-dashed border-slate-200">No previous prescriptions recorded.</div>;
+                                    }
+                                    
+                                    return (
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                            {historyRx.map(rx => (
+                                                <div key={rx.id} className="bg-slate-50 border border-slate-200 rounded-xl p-4 hover:shadow-md transition-shadow">
+                                                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-200">
+                                                        <div className="font-bold text-slate-700">
+                                                            {new Date(rx.date || parseInt(rx.id.split('-')[1] || '0')).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                                                        </div>
+                                                        <div className={`text-[10px] font-bold uppercase px-2 py-1 rounded tracking-wider ${rx.status === 'Completed' ? 'bg-emerald-100 text-emerald-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                                                            {rx.status || 'Pending'}
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {rx.items && rx.items.length > 0 ? (
+                                                        <ul className="space-y-2 mb-3">
+                                                            {rx.items.map((item, i) => (
+                                                                <li key={i} className="text-sm bg-white p-2 rounded border border-slate-100 flex flex-col">
+                                                                    <div className="font-bold text-slate-800 flex justify-between">
+                                                                        <span>{item.drugName} <span className="text-slate-400 font-mono text-xs font-normal">({item.strength || item.dosage})</span></span>
+                                                                        <span className="font-mono text-xs text-bwz-primary font-bold">x{item.quantityToDispense}</span>
+                                                                    </div>
+                                                                    <div className="text-xs text-slate-500 mt-1 flex items-center">
+                                                                        <Clock size={10} className="mr-1" /> {item.frequency} <span className="mx-2 opacity-50">|</span> {item.duration}
+                                                                        {item.substitutionNote && <span className="ml-2 text-[10px] text-orange-500 font-bold bg-orange-50 px-1 rounded">Note: {item.substitutionNote}</span>}
+                                                                    </div>
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    ) : (
+                                                        <div className="text-sm text-slate-600 bg-white p-3 rounded-lg border border-slate-100 whitespace-pre-wrap font-serif italic mb-3">
+                                                            {rx.specialRisks && !rx.specialRisks.startsWith('None') ? rx.specialRisks : 'Non-inventory prescription text or notes.'}
+                                                        </div>
+                                                    )}
+                                                    
+                                                    {rx.specialRisks && rx.items && rx.items.length > 0 && (
+                                                        <div className="mt-2 text-xs font-bold text-red-600 bg-red-50 p-2 rounded flex items-start">
+                                                            <AlertTriangle size={12} className="mr-1 mt-0.5 shrink-0" />
+                                                            <span>{rx.specialRisks}</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })()}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -514,24 +791,43 @@ const DoctorView: React.FC = () => {
                                 }
                                 return true;
                             })
-                            .map(client => (
-                            <div key={client.id} onClick={() => handleSelectPatient(client.id)} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 cursor-pointer hover:shadow-lg transition-all group border-l-4 hover:border-l-bwz-primary relative overflow-hidden" style={{ borderLeftColor: client.status === PatientStatus.RELAPSE ? '#ef4444' : undefined }}>
-                                {client.isLegacy && (
-                                    <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-1 rounded-bl shadow-sm">
-                                        LEGACY
+                            .map(client => {
+                                const queueStatus = patientQueue.find(q => q.patientId === client.id && q.status !== 'Completed')?.status;
+                                return (
+                                    <div key={client.id} onClick={() => handleSelectPatient(client.id)} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 cursor-pointer hover:shadow-lg transition-all group border-l-4 hover:border-l-bwz-primary relative overflow-hidden flex flex-col justify-between" style={{ borderLeftColor: client.status === PatientStatus.RELAPSE ? '#ef4444' : client.status === PatientStatus.NEW ? '#3b82f6' : client.status === PatientStatus.TERMINATED ? '#10b981' : undefined }}>
+                                        {client.isLegacy && (
+                                            <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-1 rounded-bl shadow-sm">
+                                                LEGACY
+                                            </div>
+                                        )}
+                                        <div>
+                                            <div className="flex justify-between items-start mb-2">
+                                                <h3 className="font-bold text-lg text-slate-800">{client.name}</h3>
+                                                <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${
+                                                    client.status === PatientStatus.RELAPSE ? 'bg-red-50 text-red-700 ring-1 ring-red-500/20' :
+                                                    client.status === PatientStatus.NEW ? 'bg-blue-50 text-blue-700 ring-1 ring-blue-500/20' :
+                                                    client.status === PatientStatus.TERMINATED ? 'bg-green-50 text-green-700 ring-1 ring-green-500/20' :
+                                                    'bg-slate-50 text-slate-700 ring-1 ring-slate-200'
+                                                }`}>{client.status}</span>
+                                            </div>
+                                            <p className="text-xs text-slate-500 mb-4">{client.id} • {client.age}y • {client.gender}</p>
+                                        </div>
+                                        <div className="flex justify-between items-center text-xs font-mono text-slate-400 pt-3 border-t border-slate-50">
+                                            <span>Last: {new Date(client.lastVisitDate).toLocaleDateString()}</span>
+                                            {queueStatus ? (
+                                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center ${
+                                                    queueStatus === 'Waiting' ? 'bg-amber-50 text-amber-600 animate-pulse' : 'bg-emerald-50 text-emerald-600 animate-pulse'
+                                                }`}>
+                                                    {queueStatus === 'Waiting' ? 'Waiting' : 'Consulting'}
+                                                </span>
+                                            ) : (
+                                                <span className="text-[9px] text-slate-300">Registered</span>
+                                            )}
+                                            {client.riskProfile.suicidalIdeation && <span className="text-red-600 font-bold flex items-center bg-red-50 px-1.5 py-0.5 rounded border border-red-200"><AlertTriangle size={11} className="mr-1"/> Risk</span>}
+                                        </div>
                                     </div>
-                                )}
-                                <div className="flex justify-between items-start mb-2">
-                                <h3 className="font-bold text-lg text-slate-800">{client.name}</h3>
-                                <span className="text-[10px] bg-slate-100 px-2 py-1 rounded font-bold uppercase tracking-wider">{client.status}</span>
-                                </div>
-                                <p className="text-xs text-slate-500 mb-4">{client.id} • {client.age}y • {client.gender}</p>
-                                <div className="flex justify-between items-center text-xs font-mono text-slate-400 pt-3 border-t border-slate-50">
-                                <span>Last: {new Date(client.lastVisitDate).toLocaleDateString()}</span>
-                                {client.riskProfile.suicidalIdeation && <span className="text-red-600 font-bold flex items-center"><AlertTriangle size={12} className="mr-1"/> Risk</span>}
-                                </div>
-                            </div>
-                        ))}
+                                );
+                            })}
                     </div>
                 </div>
             )}

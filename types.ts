@@ -142,6 +142,7 @@ export interface ClinicalHistory {
   familyHistory: string;
   pastPsychMedicalHistory: string;
   substanceAbuseHistory: string;
+  vitals?: VitalsData;
 }
 
 export interface MSEData {

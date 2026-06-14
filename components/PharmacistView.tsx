@@ -596,7 +596,8 @@ const PharmacistView: React.FC = () => {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                           {dispenseLogs.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-slate-400">No history found.</td></tr>}
-                          {dispenseLogs.slice().reverse()
+                          {dispenseLogs.slice()
+                            .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
                             .filter(l => l.drugName.toLowerCase().includes(logFilter.toLowerCase()) || l.patientName.toLowerCase().includes(logFilter.toLowerCase()))
                             .map(log => (
                               <tr key={log.id} className="hover:bg-slate-50">

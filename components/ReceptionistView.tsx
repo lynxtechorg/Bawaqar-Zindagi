@@ -6,12 +6,20 @@ import { Gender, PatientStatus, ReferenceSource, ClientProfile } from '../types'
 import { Plus, Users, MapPin, Search, CheckCircle, Navigation, Edit, Save, ArrowRight, History, Activity, Loader2, RefreshCw, Clock, X, Trash } from 'lucide-react';
 
 const ReceptionistView: React.FC = () => {
-  const { addClient, updateClientProfile, deleteClient, locations, clients, addToQueue, patientQueue, refreshData } = useData();
+  const { addClient, updateClientProfile, deleteClient, locations, clients, addToQueue, patientQueue, refreshData, histories, saveConsultation } = useData();
   const { organization } = useAuth();
   
   const [activeTab, setActiveTab] = useState<'register' | 'lookup'>('register');
   const [searchTerm, setSearchTerm] = useState('');
   
+  // Registration Layout Stepper State
+  const [formStep, setFormStep] = useState(1);
+
+  // Advanced Lookup Filtering States
+  const [selectedRiskFilter, setSelectedRiskFilter] = useState<'All' | 'High Risk' | 'Normal'>('All');
+  const [selectedGenderFilter, setSelectedGenderFilter] = useState<'All' | 'Male' | 'Female' | 'Other'>('All');
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<'All' | 'Active' | 'Discharged'>('All');
+
   // Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -150,6 +158,7 @@ const ReceptionistView: React.FC = () => {
       setEditingId(null);
       setIsLegacy(false);
       setLegacyDate('');
+      setFormStep(1);
   };
 
   const handleEditClick = (client: ClientProfile) => {
@@ -187,6 +196,7 @@ const ReceptionistView: React.FC = () => {
      setIsEditing(true);
      setEditingId(client.id);
      setActiveTab('register');
+     setFormStep(1);
      window.scrollTo(0, 0);
   };
 
@@ -220,7 +230,17 @@ const ReceptionistView: React.FC = () => {
       setDeleteConfirm(null);
   };
 
-  const filteredClients = clients.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()) || c.cnic.includes(searchTerm) || c.id.includes(searchTerm));
+  const filteredClients = clients.filter(c => {
+    const matchesSearch = c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          c.cnic.includes(searchTerm) || 
+                          c.id.includes(searchTerm);
+    const matchesGender = selectedGenderFilter === 'All' || c.gender === selectedGenderFilter;
+    const matchesStatus = selectedStatusFilter === 'All' || c.status === selectedStatusFilter;
+    const isHighRisk = !!(c.riskProfile?.suicidalIdeation || c.riskProfile?.homicidalIntent);
+    const matchesRisk = selectedRiskFilter === 'All' || 
+                        (selectedRiskFilter === 'High Risk' ? isHighRisk : !isHighRisk);
+    return matchesSearch && matchesGender && matchesStatus && matchesRisk;
+  });
 
   // Check-In Modal State
   const [showCheckInModal, setShowCheckInModal] = useState(false);
@@ -233,11 +253,13 @@ const ReceptionistView: React.FC = () => {
       bp: '',
       weight: ''
   });
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
+  const [showCheckInVitalsHistory, setShowCheckInVitalsHistory] = useState(false);
 
   const openCheckIn = (client: ClientProfile) => {
       setCheckInClient(client);
       // Auto-detect type
-      const isNew = client.status === PatientStatus.NEW || client.progressNotes.length === 0;
+      const isNew = client.status === PatientStatus.NEW || (client.progressNotes || []).length === 0;
       setCheckInType(isNew ? 'New' : 'Follow-up');
       setCheckInVitals({
           temperature: client.vitals?.temperature || '',
@@ -251,23 +273,71 @@ const ReceptionistView: React.FC = () => {
 
   const confirmCheckIn = async () => {
       if (!checkInClient) return;
+      setIsCheckingIn(true);
       
-      // Save vitals specifically so they are updated and reflected immediately on doctor's dashboard view
-      const updatedClient = {
-          ...checkInClient,
-          vitals: {
+      try {
+          // Save vitals specifically so they are updated and reflected immediately on doctor's dashboard view
+          const vitals = {
               temperature: checkInVitals.temperature,
               pulse: checkInVitals.pulse,
               respRate: checkInVitals.respRate,
               bp: checkInVitals.bp,
               weight: checkInVitals.weight
+          };
+          
+          const updatedClient = {
+              ...checkInClient,
+              vitals
+          };
+          const profileRes = await updateClientProfile(updatedClient);
+          
+          if (!profileRes.success) {
+              alert("Failed to update patient vitals: " + profileRes.msg);
+          } else {
+              // Log vitals historically
+              if (vitals.temperature || vitals.pulse || vitals.respRate || vitals.bp || vitals.weight) {
+                  const checkInHistory = {
+                      id: '',
+                      clientId: checkInClient.id,
+                      diagnosis: 'Triage Check-In',
+                      chiefComplaints: 'Vitals captured during check-in.',
+                      durationOfIllness: '',
+                      familyHistory: '',
+                      pastPsychMedicalHistory: '',
+                      substanceAbuseHistory: '',
+                      vitals: vitals
+                  };
+                  
+                  const blankMse = {
+                      id: '',
+                      clientId: checkInClient.id,
+                      date: new Date().toISOString(),
+                      appearance: '',
+                      behavior: '',
+                      speech: '',
+                      mood: '',
+                      affect: '',
+                      thoughtProcess: '',
+                      thoughtContent: '',
+                      perceptualDisturbances: '',
+                      cognition: '',
+                      insight: 5,
+                      judgment: ''
+                  };
+                  
+                  await saveConsultation(checkInHistory, blankMse);
+              }
           }
-      };
-      await updateClientProfile(updatedClient);
-      
-      await addToQueue(checkInClient.id, checkInType);
-      setShowCheckInModal(false);
-      setCheckInClient(null);
+          
+          await addToQueue(checkInClient.id, checkInType, undefined, 'Waiting', checkInClient.name);
+          setShowCheckInModal(false);
+          setCheckInClient(null);
+      } catch (err: any) {
+          console.error("Check-in error:", err);
+          alert("An error occurred during check-in: " + err.message);
+      } finally {
+          setIsCheckingIn(false);
+      }
   };
 
   // Queue Segmentation
@@ -325,7 +395,12 @@ const ReceptionistView: React.FC = () => {
 
                       {/* Triage Vitals */}
                       <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-3">
-                          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Triage Vitals (Optional)</p>
+                          <div className="flex justify-between items-center text-xs font-bold text-slate-500 uppercase tracking-wider">
+                              <p>Triage Vitals (Optional)</p>
+                              <button onClick={() => setShowCheckInVitalsHistory(true)} className="text-teal-600 hover:text-teal-800 bg-teal-50 px-2 py-1 rounded border border-teal-200">
+                                  View History
+                              </button>
+                          </div>
                           <div className="grid grid-cols-2 gap-3">
                               <div>
                                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Temp (°F)</label>
@@ -380,9 +455,70 @@ const ReceptionistView: React.FC = () => {
                           </div>
                       </div>
 
-                      <button onClick={confirmCheckIn} className="w-full bg-bwz-primary text-white py-3 rounded-lg font-bold shadow-lg hover:bg-teal-700 transition-all flex justify-center items-center">
-                          <CheckCircle className="mr-2" size={18}/> Confirm Check-In
+                      <button onClick={confirmCheckIn} disabled={isCheckingIn} className="w-full bg-bwz-primary text-white py-3 rounded-lg font-bold shadow-lg hover:bg-teal-700 transition-all flex justify-center items-center disabled:opacity-50">
+                          {isCheckingIn ? <><Loader2 className="mr-2 animate-spin" size={18}/> Checking In...</> : <><CheckCircle className="mr-2" size={18}/> Confirm Check-In</>}
                       </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {showCheckInVitalsHistory && checkInClient && (
+          <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+                  <div className="flex justify-between items-center border-b pb-4 mb-4">
+                      <h2 className="text-xl font-bold font-spectral text-bwz-primary flex items-center">
+                          <Activity className="mr-2"/> Vitals History for {checkInClient.name}
+                      </h2>
+                      <button onClick={() => setShowCheckInVitalsHistory(false)} className="text-slate-500 hover:text-slate-800">
+                          ✕
+                      </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto custom-scrollbar">
+                      <table className="w-full text-left text-sm">
+                          <thead className="bg-slate-50 sticky top-0">
+                              <tr>
+                                  <th className="p-3 font-bold text-slate-600">Date/Time</th>
+                                  <th className="p-3 font-bold text-slate-600 text-center">Temp (°F)</th>
+                                  <th className="p-3 font-bold text-slate-600 text-center">Pulse (bpm)</th>
+                                  <th className="p-3 font-bold text-slate-600 text-center">Resp</th>
+                                  <th className="p-3 font-bold text-slate-600 text-center">BP</th>
+                                  <th className="p-3 font-bold text-slate-600 text-center">Weight (kg)</th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                              {checkInClient.vitals && (
+                                  <tr className="bg-teal-50 border-b-2 border-teal-100">
+                                      <td className="p-3 text-xs font-bold text-teal-800">
+                                          Current (Latest)
+                                      </td>
+                                      <td className="p-3 text-center">{checkInClient.vitals.temperature || '--'}</td>
+                                      <td className="p-3 text-center">{checkInClient.vitals.pulse || '--'}</td>
+                                      <td className="p-3 text-center">{checkInClient.vitals.respRate || '--'}</td>
+                                      <td className="p-3 text-center font-mono">{checkInClient.vitals.bp || '--'}</td>
+                                      <td className="p-3 text-center">{checkInClient.vitals.weight || '--'}</td>
+                                  </tr>
+                              )}
+                              {histories.filter(h => h.clientId === checkInClient.id && h.vitals).length === 0 && !checkInClient.vitals ? (
+                                  <tr>
+                                      <td colSpan={6} className="p-4 text-center text-slate-500 italic">No vitals history recorded for this patient.</td>
+                                  </tr>
+                              ) : (
+                                  histories.filter(h => h.clientId === checkInClient.id && h.vitals).sort((a,b) => b.id.localeCompare(a.id)).map(h => (
+                                      <tr key={h.id} className="hover:bg-slate-50">
+                                          <td className="p-3 text-xs font-bold text-slate-700">
+                                              {new Date(parseInt(h.id.split('-')[1] || '0')).toLocaleString()}
+                                          </td>
+                                          <td className="p-3 text-center">{h.vitals?.temperature || '--'}</td>
+                                          <td className="p-3 text-center">{h.vitals?.pulse || '--'}</td>
+                                          <td className="p-3 text-center">{h.vitals?.respRate || '--'}</td>
+                                          <td className="p-3 text-center font-mono">{h.vitals?.bp || '--'}</td>
+                                          <td className="p-3 text-center">{h.vitals?.weight || '--'}</td>
+                                      </tr>
+                                  ))
+                              )}
+                          </tbody>
+                      </table>
                   </div>
               </div>
           </div>
@@ -394,11 +530,43 @@ const ReceptionistView: React.FC = () => {
              <h2 className="text-xl md:text-2xl font-bold text-bwz-primary">{isEditing ? `Editing: ${editingId}` : 'Patient Intake'}</h2>
              {isEditing && <button type="button" onClick={resetForm} className="text-sm text-red-500 hover:underline">Cancel</button>}
           </div>
+
+          {/* STEP INDICATOR HEADER (Upgrade 2) */}
+          <div className="mb-8 border-b pb-6">
+              <div className="flex items-center justify-between max-w-lg mx-auto">
+                  {[
+                      { num: 1, name: "Core Identity" },
+                      { num: 2, name: "Socio-Referral" },
+                      { num: 3, name: "Contact & Triage" }
+                  ].map((s) => (
+                      <div key={s.num} className="flex flex-col items-center flex-1 relative">
+                          <button
+                              type="button"
+                              onClick={() => {
+                                  setFormStep(s.num);
+                              }}
+                              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm border-2 transition-all ${
+                                  formStep === s.num
+                                      ? "bg-bwz-primary text-white border-bwz-primary ring-4 ring-teal-500/20 shadow-md transform scale-110"
+                                      : formStep > s.num
+                                      ? "bg-emerald-500 border-emerald-500 text-white animate-fade-in"
+                                      : "bg-slate-50 border-slate-300 text-slate-500"
+                              }`}
+                          >
+                              {s.num}
+                          </button>
+                          <span className={`text-[11px] font-bold mt-2 ${formStep === s.num ? "text-bwz-primary font-black" : "text-slate-500"}`}>
+                              {s.name}
+                          </span>
+                      </div>
+                  ))}
+              </div>
+          </div>
           
           <form onSubmit={handleRegister} className="grid grid-cols-1 md:grid-cols-3 gap-6">
             
             {/* Legacy Checkbox */}
-            {!isEditing && (
+            {formStep === 1 && !isEditing && (
                 <div className="md:col-span-3 bg-yellow-50 border border-yellow-200 p-4 rounded-lg flex flex-col md:flex-row items-start md:items-center justify-between space-y-2 md:space-y-0">
                     <div className="flex items-center">
                         <History className="text-yellow-700 mr-3"/>
@@ -425,186 +593,266 @@ const ReceptionistView: React.FC = () => {
                 </div>
             )}
 
-            {/* Personal Info */}
-            <div className="md:col-span-3 bg-slate-50 p-4 rounded-lg border border-slate-200 mb-2">
-               <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Demographics</h3>
-               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="text-xs font-bold text-slate-500">CNIC {isRequired('cnic') && '*'}</label>
-                    <input required={isRequired('cnic')} placeholder="42201-xxxxxxx-x" className="w-full bg-white border border-slate-300 rounded p-2" value={formData.cnic} onChange={e => setFormData({...formData, cnic: e.target.value})} />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500">Full Name {isRequired('name') && '*'}</label>
-                    <input required={isRequired('name')} className="w-full bg-white border border-slate-300 rounded p-2" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                        <label className="text-xs font-bold text-slate-500">Age {isRequired('age') && '*'}</label>
-                        <input required={isRequired('age')} type="number" className="w-full bg-white border border-slate-300 rounded p-2" value={formData.age} onChange={e => setFormData({...formData, age: e.target.value})} />
-                    </div>
-                    <div>
-                        <label className="text-xs font-bold text-slate-500">Gender</label>
-                        <select className="w-full bg-white border border-slate-300 rounded p-2" value={formData.gender} onChange={e => setFormData({...formData, gender: e.target.value as Gender})}>
-                          <option value={Gender.MALE}>Male</option>
-                          <option value={Gender.FEMALE}>Female</option>
-                          <option value={Gender.OTHER}>Other</option>
-                        </select>
-                    </div>
-                  </div>
-               </div>
-            </div>
-
-            {/* Vitals Section */}
-            <div className="md:col-span-3 bg-teal-50 p-4 rounded-lg border border-teal-200 mb-2">
-               <h3 className="font-bold text-teal-800 mb-4 uppercase text-xs tracking-wider flex items-center">
-                  <Activity size={16} className="mr-2"/> Vitals / Triage
-               </h3>
-               <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Temp (°F)</label>
-                     <input placeholder="98.6" className="w-full bg-white border border-teal-200 rounded p-2" value={formData.temperature} onChange={e => setFormData({...formData, temperature: e.target.value})} />
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Pulse (bpm)</label>
-                     <input placeholder="72" className="w-full bg-white border border-teal-200 rounded p-2" value={formData.pulse} onChange={e => setFormData({...formData, pulse: e.target.value})} />
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">BP (mmHg)</label>
-                     <input placeholder="120/80" className="w-full bg-white border border-teal-200 rounded p-2" value={formData.bp} onChange={e => setFormData({...formData, bp: e.target.value})} />
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Resp Rate</label>
-                     <input placeholder="16" className="w-full bg-white border border-teal-200 rounded p-2" value={formData.respRate} onChange={e => setFormData({...formData, respRate: e.target.value})} />
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Weight (kg)</label>
-                     <input placeholder="e.g. 65" className="w-full bg-white border border-teal-200 rounded p-2" value={formData.weight} onChange={e => setFormData({...formData, weight: e.target.value})} />
-                  </div>
-               </div>
-            </div>
-
-            {/* Reference Source */}
-             <div className="md:col-span-3 bg-slate-50 p-4 rounded-lg border border-slate-200 mb-2">
-                <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Referral Source</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label className="text-xs font-bold text-slate-500">How did you find us?</label>
-                        <select className="w-full bg-white border border-slate-300 rounded p-2" value={formData.referenceSource} onChange={e => setFormData({...formData, referenceSource: e.target.value as ReferenceSource})}>
-                            <option value="Marketing">Marketing</option>
-                            <option value="Patient to Patient">Patient to Patient</option>
-                            <option value="Community">Community</option>
-                            <option value="MOU Partner">MOU Partner</option>
-                            <option value="Other">Other</option>
-                        </select>
-                    </div>
-                    {formData.referenceSource === 'MOU Partner' && (
-                        <div>
-                             <label className="text-xs font-bold text-slate-500">Partner Organization Name</label>
-                             <input placeholder="Enter Partner Name..." className="w-full bg-white border border-slate-300 rounded p-2" value={formData.referenceDetail} onChange={e => setFormData({...formData, referenceDetail: e.target.value})} />
+            {/* STEP 1: Core Identity */}
+            {formStep === 1 && (
+                <div className="md:col-span-3 space-y-6 animate-fade-in">
+                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                        <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Demographics</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-fade-in">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 block mb-1">Full Name {isRequired('name') && '*'}</label>
+                                <input required={isRequired('name')} className="w-full bg-white border border-slate-300 rounded p-3 text-slate-800 font-bold focus:ring-2 focus:ring-teal-500 outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 block mb-1">Gender</label>
+                                <select className="w-full bg-white border border-slate-300 rounded p-3 font-bold text-slate-800 outline-none focus:ring-2 focus:ring-teal-500" value={formData.gender} onChange={e => setFormData({...formData, gender: e.target.value as Gender})}>
+                                  <option value={Gender.MALE}>Male</option>
+                                  <option value={Gender.FEMALE}>Female</option>
+                                  <option value={Gender.OTHER}>Other</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 block mb-1">Age {isRequired('age') && '*'}</label>
+                                <input required={isRequired('age')} type="number" className="w-full bg-white border border-slate-300 rounded p-3 text-slate-800 font-mono focus:ring-2 focus:ring-teal-500 outline-none" value={formData.age} onChange={e => setFormData({...formData, age: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 block mb-1">CNIC {isRequired('cnic') && '*'}</label>
+                                <input 
+                                    required={isRequired('cnic')} 
+                                    placeholder="42201-xxxxxxx-x" 
+                                    className="w-full bg-white border border-slate-300 rounded p-3 text-slate-800 font-mono focus:ring-2 focus:ring-teal-500 outline-none" 
+                                    value={formData.cnic} 
+                                    onChange={e => {
+                                        const digits = e.target.value.replace(/\D/g, '').slice(0, 13);
+                                        let formatted = '';
+                                        if (digits.length > 0) {
+                                            formatted += digits.slice(0, 5);
+                                        }
+                                        if (digits.length > 5) {
+                                            formatted += '-' + digits.slice(5, 12);
+                                        }
+                                        if (digits.length > 12) {
+                                            formatted += '-' + digits.slice(12, 13);
+                                        }
+                                        setFormData({...formData, cnic: formatted});
+                                    }} 
+                                    maxLength={15}
+                                />
+                            </div>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 2: Socio-Referral */}
+            {formStep === 2 && (
+                <div className="md:col-span-3 space-y-6 animate-fade-in">
+                    {/* Reference Source */}
+                     <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                        <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Referral Source</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-xs font-bold text-slate-500 block mb-1">How did you find us?</label>
+                                <select className="w-full bg-white border border-slate-300 rounded p-3 outline-none" value={formData.referenceSource} onChange={e => setFormData({...formData, referenceSource: e.target.value as ReferenceSource})}>
+                                    <option value="Marketing">Marketing</option>
+                                    <option value="Patient to Patient">Patient to Patient</option>
+                                    <option value="Community">Community</option>
+                                    <option value="MOU Partner">MOU Partner</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            {formData.referenceSource === 'MOU Partner' && (
+                                <div>
+                                     <label className="text-xs font-bold text-slate-500 block mb-1">Partner Organization Name</label>
+                                     <input placeholder="Enter Partner Name..." className="w-full bg-white border border-slate-300 rounded p-3" value={formData.referenceDetail} onChange={e => setFormData({...formData, referenceDetail: e.target.value})} />
+                                </div>
+                            )}
+                        </div>
+                     </div>
+
+                    {/* Socio-Cultural */}
+                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                       <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Socio-Cultural</h3>
+                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Religion</label>
+                             <input className="w-full bg-white border border-slate-300 rounded p-3" value={formData.religion} onChange={e => setFormData({...formData, religion: e.target.value})} />
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Sect</label>
+                             <input className="w-full bg-white border border-slate-300 rounded p-3" value={formData.sect} onChange={e => setFormData({...formData, sect: e.target.value})} />
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Marital Status</label>
+                             <select className="w-full bg-white border border-slate-300 rounded p-3 outline-none" value={formData.maritalStatus} onChange={e => setFormData({...formData, maritalStatus: e.target.value})}>
+                               <option>Single</option><option>Married</option><option>Divorced</option><option>Widowed</option>
+                             </select>
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Education</label>
+                             <input className="w-full bg-white border border-slate-300 rounded p-3" value={formData.education} onChange={e => setFormData({...formData, education: e.target.value})} />
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Employment Status</label>
+                             <select className="w-full bg-white border border-slate-300 rounded p-3 outline-none" value={formData.employmentStatus} onChange={e => setFormData({...formData, employmentStatus: e.target.value})}>
+                               <option>Unemployed</option>
+                               <option>Employed</option>
+                               <option>Self-Employed</option>
+                               <option>Student</option>
+                               <option>Retired</option>
+                             </select>
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Family Type</label>
+                             <select className="w-full bg-white border border-slate-300 rounded p-3 outline-none" value={formData.familyType} onChange={e => setFormData({...formData, familyType: e.target.value as any})}>
+                               <option>Nuclear</option>
+                               <option>Extended</option>
+                             </select>
+                          </div>
+                       </div>
+                    </div>
+                </div>
+            )}
+
+            {/* STEP 3: Contact & Triage */}
+            {formStep === 3 && (
+                <div className="md:col-span-3 space-y-6 animate-fade-in">
+                    {/* Detailed Location & Contact */}
+                    <div className="bg-slate-50 p-5 rounded-xl border border-slate-200">
+                       <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Location & Contact</h3>
+                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Contact Number {isRequired('contact') && '*'}</label>
+                             <input required={isRequired('contact')} className="w-full bg-white border border-slate-300 rounded p-3 text-slate-800 font-mono outline-none" value={formData.contact} onChange={e => setFormData({...formData, contact: e.target.value})} />
+                          </div>
+                          
+                          {/* Smart Address Search */}
+                          <div className="relative">
+                              <label className="text-xs font-bold text-slate-500 flex items-center mb-1"><Navigation size={12} className="mr-1"/> Location Search</label>
+                              <input 
+                                 placeholder="Search Area..." 
+                                 className="w-full bg-white border border-slate-300 rounded p-3 pl-10" 
+                                 value={addressSearch}
+                                 onChange={(e) => {
+                                     setAddressSearch(e.target.value);
+                                     setShowAddressResults(true);
+                                 }}
+                              />
+                              <Search size={16} className="absolute left-3 top-10 text-slate-400" />
+                              
+                              {showAddressResults && addressSearch.length > 2 && (
+                                  <div className="absolute z-10 bg-white border border-slate-300 shadow-xl rounded-b w-full mt-1 max-h-40 overflow-y-auto">
+                                      {locations.filter(l => l.toLowerCase().includes(addressSearch.toLowerCase())).map(l => (
+                                          <div key={l} onClick={() => selectAddress(l)} className="p-3 hover:bg-slate-100 cursor-pointer text-sm">
+                                              {l}, Karachi
+                                          </div>
+                                      ))}
+                                      <div onClick={() => selectAddress(addressSearch)} className="p-3 hover:bg-slate-100 cursor-pointer text-sm font-bold text-bwz-primary border-t">
+                                          Use "{addressSearch}"
+                                      </div>
+                                  </div>
+                              )}
+                          </div>
+
+                          <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-4 mt-2">
+                               <div>
+                                   <label className="text-xs font-bold text-slate-500 block mb-1">Town / Area</label>
+                                   <input placeholder="e.g. Gulshan-e-Iqbal" className="w-full bg-white border border-slate-300 rounded p-3 text-slate-800 font-semibold" value={formData.area} onChange={e => setFormData({...formData, area: e.target.value})} />
+                               </div>
+                               <div>
+                                   <label className="text-xs font-bold text-slate-500 block mb-1">Block / Sector</label>
+                                   <input placeholder="e.g. Block 13-D" className="w-full bg-white border border-slate-300 rounded p-3" value={formData.sectorBlock} onChange={e => setFormData({...formData, sectorBlock: e.target.value})} />
+                               </div>
+                               <div>
+                                   <label className="text-xs font-bold text-slate-500 block mb-1">Street / House No</label>
+                                   <input placeholder="e.g. House 123, St 5" className="w-full bg-white border border-slate-300 rounded p-3" value={formData.street} onChange={e => setFormData({...formData, street: e.target.value})} />
+                               </div>
+                          </div>
+
+                          <div className="md:col-span-2">
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Emergency Contact {isRequired('emergency') && '*'}</label>
+                             <input required={isRequired('emergency')} className="w-full bg-white border border-slate-300 rounded p-3 text-slate-800" value={formData.emergency} onChange={e => setFormData({...formData, emergency: e.target.value})} />
+                          </div>
+                       </div>
+                    </div>
+
+                    {/* Vitals Section */}
+                    <div className="bg-teal-50 p-5 rounded-xl border border-teal-200">
+                       <h3 className="font-bold text-teal-800 mb-4 uppercase text-xs tracking-wider flex items-center">
+                          <Activity size={16} className="mr-2"/> Vitals / Triage
+                       </h3>
+                       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Temp (°F)</label>
+                             <input placeholder="98.6" className="w-full bg-white border border-teal-200 rounded p-3 font-mono font-bold text-slate-800 focus:ring-2 focus:ring-teal-500" value={formData.temperature} onChange={e => setFormData({...formData, temperature: e.target.value})} />
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Pulse (bpm)</label>
+                             <input placeholder="72" className="w-full bg-white border border-teal-200 rounded p-3 font-mono font-bold text-slate-800 focus:ring-2 focus:ring-teal-500" value={formData.pulse} onChange={e => setFormData({...formData, pulse: e.target.value})} />
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">BP (mmHg)</label>
+                             <input placeholder="120/80" className="w-full bg-white border border-teal-200 rounded p-3 font-mono font-bold text-slate-800 focus:ring-2 focus:ring-teal-500" value={formData.bp} onChange={e => setFormData({...formData, bp: e.target.value})} />
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Resp Rate</label>
+                             <input placeholder="16" className="w-full bg-white border border-teal-200 rounded p-3 font-mono font-bold text-slate-800 focus:ring-2 focus:ring-teal-500" value={formData.respRate} onChange={e => setFormData({...formData, respRate: e.target.value})} />
+                          </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 block mb-1">Weight (kg)</label>
+                             <input placeholder="e.g. 65" className="w-full bg-white border border-teal-200 rounded p-3 font-mono font-bold text-slate-800 focus:ring-2 focus:ring-teal-500" value={formData.weight} onChange={e => setFormData({...formData, weight: e.target.value})} />
+                          </div>
+                       </div>
+                    </div>
+                </div>
+            )}
+
+            {/* FOOTER NAV BUTTONS */}
+            <div className="md:col-span-3 flex justify-between items-center border-t pt-6 bg-slate-50 -mx-4 md:-mx-8 p-6 md:p-8 mt-4 rounded-b-xl">
+                <div>
+                    {formStep > 1 && (
+                        <button
+                            type="button"
+                            onClick={() => setFormStep(prev => prev - 1)}
+                            className="bg-white border hover:bg-slate-100 text-slate-700 px-6 py-3 rounded-lg font-bold shadow-sm transition"
+                        >
+                            Back
+                        </button>
                     )}
                 </div>
-             </div>
-
-
-            {/* Socio-Cultural */}
-            <div className="md:col-span-3 bg-slate-50 p-4 rounded-lg border border-slate-200 mb-2">
-               <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Socio-Cultural</h3>
-               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Religion</label>
-                     <input className="w-full bg-white border border-slate-300 rounded p-2" value={formData.religion} onChange={e => setFormData({...formData, religion: e.target.value})} />
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Sect</label>
-                     <input className="w-full bg-white border border-slate-300 rounded p-2" value={formData.sect} onChange={e => setFormData({...formData, sect: e.target.value})} />
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Marital Status</label>
-                     <select className="w-full bg-white border border-slate-300 rounded p-2" value={formData.maritalStatus} onChange={e => setFormData({...formData, maritalStatus: e.target.value})}>
-                       <option>Single</option><option>Married</option><option>Divorced</option><option>Widowed</option>
-                     </select>
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Education</label>
-                     <input className="w-full bg-white border border-slate-300 rounded p-2" value={formData.education} onChange={e => setFormData({...formData, education: e.target.value})} />
-                  </div>
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Employment Status</label>
-                     <select className="w-full bg-white border border-slate-300 rounded p-2" value={formData.employmentStatus} onChange={e => setFormData({...formData, employmentStatus: e.target.value})}>
-                       <option>Unemployed</option>
-                       <option>Employed</option>
-                       <option>Self-Employed</option>
-                       <option>Student</option>
-                       <option>Retired</option>
-                     </select>
-                  </div>
-               </div>
+                <div className="flex space-x-3">
+                    {formStep < 3 ? (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                if (formStep === 1) {
+                                    if (isRequired('name') && !formData.name) {
+                                        alert("Please enter patient name.");
+                                        return;
+                                    }
+                                    if (isRequired('age') && !formData.age) {
+                                        alert("Please enter patient age.");
+                                        return;
+                                    }
+                                }
+                                setFormStep(prev => prev + 1);
+                            }}
+                            className="bg-bwz-primary text-white px-8 py-3 rounded-lg font-bold hover:bg-teal-700 transition flex items-center shadow-md active:scale-95"
+                        >
+                            Next Step <ArrowRight size={16} className="ml-2" />
+                        </button>
+                    ) : (
+                        <button
+                            type="submit"
+                            disabled={isSubmitting}
+                            className={`px-8 py-3 rounded-lg font-bold shadow-lg transition-all text-base flex items-center ${isEditing ? 'bg-orange-600 hover:bg-orange-700' : 'bg-bwz-primary hover:bg-teal-700'} text-white disabled:opacity-50`}
+                        >
+                            {isSubmitting ? <Loader2 className="mr-2 animate-spin"/> : isEditing ? <Save className="mr-2"/> : <CheckCircle className="mr-2"/>}
+                            {isSubmitting ? 'Processing...' : isEditing ? 'Save Changes' : 'Register Patient & Finish'}
+                        </button>
+                    )}
+                </div>
             </div>
-
-            {/* Detailed Location & Contact */}
-            <div className="md:col-span-3 bg-slate-50 p-4 rounded-lg border border-slate-200">
-               <h3 className="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Location & Contact</h3>
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                     <label className="text-xs font-bold text-slate-500">Contact Number {isRequired('contact') && '*'}</label>
-                     <input required={isRequired('contact')} className="w-full bg-white border border-slate-300 rounded p-2" value={formData.contact} onChange={e => setFormData({...formData, contact: e.target.value})} />
-                  </div>
-                  
-                  {/* Smart Address Search */}
-                  <div className="relative">
-                      <label className="text-xs font-bold text-slate-500 flex items-center"><Navigation size={12} className="mr-1"/> Location Search</label>
-                      <input 
-                         placeholder="Search Area..." 
-                         className="w-full bg-white border border-slate-300 rounded p-2 pl-8" 
-                         value={addressSearch}
-                         onChange={(e) => {
-                             setAddressSearch(e.target.value);
-                             setShowAddressResults(true);
-                         }}
-                      />
-                      <Search size={14} className="absolute left-2 top-8 text-slate-400" />
-                      
-                      {showAddressResults && addressSearch.length > 2 && (
-                          <div className="absolute z-10 bg-white border border-slate-300 shadow-xl rounded-b w-full mt-1 max-h-40 overflow-y-auto">
-                              {locations.filter(l => l.toLowerCase().includes(addressSearch.toLowerCase())).map(l => (
-                                  <div key={l} onClick={() => selectAddress(l)} className="p-2 hover:bg-slate-100 cursor-pointer text-sm">
-                                      {l}, Karachi
-                                  </div>
-                              ))}
-                              <div onClick={() => selectAddress(addressSearch)} className="p-2 hover:bg-slate-100 cursor-pointer text-sm font-bold text-bwz-primary">
-                                  Use "{addressSearch}"
-                              </div>
-                          </div>
-                      )}
-                  </div>
-
-                  <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-4 mt-2">
-                       <div>
-                           <label className="text-xs font-bold text-slate-500">Town / Area</label>
-                           <input placeholder="e.g. Gulshan-e-Iqbal" className="w-full bg-white border border-slate-300 rounded p-2" value={formData.area} onChange={e => setFormData({...formData, area: e.target.value})} />
-                       </div>
-                       <div>
-                           <label className="text-xs font-bold text-slate-500">Block / Sector</label>
-                           <input placeholder="e.g. Block 13-D" className="w-full bg-white border border-slate-300 rounded p-2" value={formData.sectorBlock} onChange={e => setFormData({...formData, sectorBlock: e.target.value})} />
-                       </div>
-                       <div>
-                           <label className="text-xs font-bold text-slate-500">Street / House No</label>
-                           <input placeholder="e.g. House 123, St 5" className="w-full bg-white border border-slate-300 rounded p-2" value={formData.street} onChange={e => setFormData({...formData, street: e.target.value})} />
-                       </div>
-                  </div>
-
-                  <div className="md:col-span-2">
-                     <label className="text-xs font-bold text-slate-500">Emergency Contact {isRequired('emergency') && '*'}</label>
-                     <input required={isRequired('emergency')} className="w-full bg-white border border-slate-300 rounded p-2" value={formData.emergency} onChange={e => setFormData({...formData, emergency: e.target.value})} />
-                  </div>
-               </div>
-            </div>
-            
-            <button type="submit" disabled={isSubmitting} className={`md:col-span-3 ${isEditing ? 'bg-orange-600 hover:bg-orange-700' : 'bg-bwz-primary hover:bg-teal-700'} text-white py-4 rounded-xl font-bold shadow-lg transition-all text-lg flex justify-center items-center disabled:opacity-50 disabled:cursor-not-allowed`}>
-               {isSubmitting ? <Loader2 className="mr-2 animate-spin"/> : isEditing ? <Save className="mr-2"/> : <CheckCircle className="mr-2"/>} 
-               {isSubmitting ? 'Processing...' : isEditing ? 'Save Changes' : 'Register Patient'}
-            </button>
           </form>
         </div>
       )}
@@ -690,6 +938,74 @@ const ReceptionistView: React.FC = () => {
                 </div>
            </div>
 
+           {/* ADVANCED LOOKUP SMART CHIPS FILTER TAB (Upgrade 6) */}
+           <div className="mb-6 p-4 bg-slate-50 rounded-xl border border-slate-200/60 flex flex-wrap gap-4 items-center justify-between">
+               <div className="flex flex-wrap gap-3 items-center">
+                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-1">Smart Filters:</span>
+                   
+                   {/* Risk Filter */}
+                   <div className="flex items-center space-x-1 bg-white border border-slate-200 p-1.5 rounded-lg shadow-sm">
+                       <span className="text-[10px] uppercase font-bold text-slate-400 px-1.5 font-sans">Risk:</span>
+                       {(['All', 'High Risk', 'Normal'] as const).map(rf => (
+                           <button
+                               key={rf}
+                               type="button"
+                               onClick={() => setSelectedRiskFilter(rf)}
+                               className={`text-xs px-2.5 py-1 rounded-md font-bold transition-all ${
+                                   selectedRiskFilter === rf
+                                       ? 'bg-rose-500 text-white shadow-sm'
+                                       : 'text-slate-600 hover:bg-slate-100'
+                               }`}
+                           >
+                               {rf}
+                           </button>
+                       ))}
+                   </div>
+
+                   {/* Gender Filter */}
+                   <div className="flex items-center space-x-1 bg-white border border-slate-200 p-1.5 rounded-lg shadow-sm">
+                       <span className="text-[10px] uppercase font-bold text-slate-400 px-1.5 font-sans">Gender:</span>
+                       {(['All', 'Male', 'Female', 'Other'] as const).map(gf => (
+                           <button
+                               key={gf}
+                               type="button"
+                               onClick={() => setSelectedGenderFilter(gf)}
+                               className={`text-xs px-2.5 py-1 rounded-md font-bold transition-all ${
+                                   selectedGenderFilter === gf
+                                      ? 'bg-blue-600 text-white shadow-sm'
+                                      : 'text-slate-600 hover:bg-slate-100'
+                               }`}
+                           >
+                               {gf}
+                           </button>
+                       ))}
+                   </div>
+
+                   {/* Status Filter */}
+                   <div className="flex items-center space-x-1 bg-white border border-slate-200 p-1.5 rounded-lg shadow-sm">
+                       <span className="text-[10px] uppercase font-bold text-slate-400 px-1.5 font-sans font-sans">Status:</span>
+                       {(['All', 'Active', 'Discharged'] as const).map(sf => (
+                           <button
+                               key={sf}
+                               type="button"
+                               onClick={() => setSelectedStatusFilter(sf)}
+                               className={`text-xs px-2.5 py-1 rounded-md font-bold transition-all ${
+                                   selectedStatusFilter === sf
+                                       ? 'bg-emerald-600 text-white shadow-sm'
+                                       : 'text-slate-600 hover:bg-slate-100'
+                               }`}
+                           >
+                               {sf}
+                           </button>
+                       ))}
+                   </div>
+               </div>
+
+               <div className="text-xs text-slate-500 font-bold">
+                   Showing <span className="text-slate-800 font-extrabold">{filteredClients.length}</span> patient{filteredClients.length === 1 ? '' : 's'}
+               </div>
+           </div>
+
            {filteredClients.length === 0 ? (
                <div className="text-center py-10 text-slate-400">
                    <Users size={48} className="mx-auto mb-2 opacity-20"/>
@@ -711,7 +1027,8 @@ const ReceptionistView: React.FC = () => {
                    </thead>
                    <tbody>
                       {filteredClients.map(c => {
-                          const queueItem = patientQueue.find(q => q.patientId === c.id);
+                          const queueItem = patientQueue.find(q => q.patientId === c.id && q.status !== 'Completed') || 
+                                            patientQueue.find(q => q.patientId === c.id);
                           const isQueued = !!queueItem;
                           const isCompleted = queueItem?.status === 'Completed';
                           
