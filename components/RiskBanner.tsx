@@ -69,7 +69,7 @@ const RiskBanner: React.FC<RiskBannerProps> = ({ client }) => {
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden transition-all duration-300">
+    <div className="card overflow-hidden transition-all duration-300">
       {/* Banner Header Accent */}
       {isHighRisk ? (
         <div className="bg-gradient-to-r from-red-500 via-rose-600 to-red-700 text-white p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

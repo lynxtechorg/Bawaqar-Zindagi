@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
+import { toast } from '../lib/toast';
 import { OutreachSession } from '../types';
 import MHQoLAssessment from './MHQoLAssessment';
 import { MapPin, Users, Heart, BookOpen, Briefcase, Tent, UserPlus, StickyNote, Copy, Layers, Calendar, AlertTriangle, Search, ClipboardList, Home, FileText, CheckCircle, Plus } from 'lucide-react';
@@ -138,7 +139,7 @@ const PRPView: React.FC = () => {
     }
 
     addSession(finalSession);
-    alert('Session Logged Successfully');
+    toast.success('Session logged successfully.');
     // Reset inputs
     setFormData(prev => ({ ...prev, newCount: 0, followUpCount: 0, headcount: 0, pamphletsQty: 0, maleCount: 0, femaleCount: 0, notes: '', nextDate: '' }));
   };
@@ -147,7 +148,7 @@ const PRPView: React.FC = () => {
     if (selectedPatientId && rehabNote.trim()) {
         addProgressNote(selectedPatientId, `[REHAB NOTE] ${rehabNote}`);
         setRehabNote('');
-        alert('Rehab Progress Note Added');
+        toast.success('Rehab progress note added.');
     }
   };
 
@@ -160,10 +161,10 @@ const PRPView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6 h-auto min-h-[calc(100vh-80px)] md:h-[calc(100vh-80px)] md:overflow-y-auto">
        
-       <div className="flex space-x-4 mb-6">
-           <button onClick={() => setActiveTab('log')} className={`px-4 py-2 rounded-lg font-bold ${activeTab === 'log' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'}`}>Log Session</button>
-           <button onClick={() => setActiveTab('schedule')} className={`px-4 py-2 rounded-lg font-bold ${activeTab === 'schedule' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'}`}>Alerts & Schedule</button>
-           <button onClick={() => setActiveTab('assessment')} className={`px-4 py-2 rounded-lg font-bold ${activeTab === 'assessment' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600'}`}>Individual Assessment</button>
+       <div className="inline-flex bg-slate-100 rounded-xl p-1 mb-6 gap-1">
+           {([['log','Log Session'],['schedule','Alerts & Schedule'],['assessment','Individual Assessment']] as const).map(([id,label]) => (
+             <button key={id} onClick={() => setActiveTab(id)} className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${activeTab === id ? 'bg-white text-slate-900 shadow-soft' : 'text-slate-500 hover:text-slate-700'}`}>{label}</button>
+           ))}
        </div>
 
        {activeTab === 'log' && (
@@ -171,7 +172,7 @@ const PRPView: React.FC = () => {
           
           {/* Stats Cards */}
           <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-3 gap-6">
-             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex items-center space-x-4">
+             <div className="card p-6 flex items-center space-x-4">
                 <div className="bg-pink-100 p-3 rounded-full text-pink-600"><Users size={24}/></div>
                 <div>
                   <p className="text-xs text-slate-500 font-bold uppercase">Total Headcount</p>
@@ -179,7 +180,7 @@ const PRPView: React.FC = () => {
                 </div>
              </div>
              {isField && (
-                 <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex items-center space-x-4">
+                 <div className="card p-6 flex items-center space-x-4">
                    <div className="bg-blue-100 p-3 rounded-full text-blue-600"><Home size={24}/></div>
                    <div>
                      <p className="text-xs text-slate-500 font-bold uppercase">Home Visits</p>
@@ -187,7 +188,7 @@ const PRPView: React.FC = () => {
                    </div>
                  </div>
              )}
-             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex items-center space-x-4">
+             <div className="card p-6 flex items-center space-x-4">
                 <div className="bg-purple-100 p-3 rounded-full text-purple-600"><Briefcase size={24}/></div>
                 <div>
                   <p className="text-xs text-slate-500 font-bold uppercase">Sessions Held</p>
@@ -197,7 +198,7 @@ const PRPView: React.FC = () => {
           </div>
 
           {/* INPUT FORM */}
-          <div className="md:col-span-1 bg-white rounded-xl shadow-lg border border-slate-200 p-6 h-fit order-2 md:order-1">
+          <div className="md:col-span-1 card shadow-card p-6 h-fit order-2 md:order-1">
             <h2 className="font-bold text-xl text-slate-800 mb-6 flex items-center">
                 {isBWZ ? <Heart className="mr-2 text-bwz-primary"/> : (isCampsite ? <Tent className="mr-2 text-indigo-900"/> : <MapPin className="mr-2 text-indigo-900"/>)}
                 {isBWZ ? 'Rehab Session Log' : (isCampsite ? 'Campsite Log' : 'Field Log')}
@@ -360,7 +361,7 @@ const PRPView: React.FC = () => {
           </div>
 
           {/* List */}
-          <div className="md:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-6 overflow-hidden order-1 md:order-2">
+          <div className="md:col-span-2 card p-6 overflow-hidden order-1 md:order-2">
              <h2 className="font-bold text-lg mb-4">Recent {organization} {copMode ? `(${copMode})` : ''} Activity</h2>
              <div className="space-y-4">
                {sessions.slice().reverse().map((s, i) => (
@@ -408,7 +409,7 @@ const PRPView: React.FC = () => {
        {activeTab === 'schedule' && (
            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                {/* Upcoming */}
-               <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+               <div className="card p-6">
                    <h2 className="font-bold text-lg mb-4 flex items-center"><Calendar className="mr-2 text-bwz-primary"/> Upcoming Scheduled Sessions</h2>
                    {upcomingSessions.length === 0 ? <p className="text-slate-400 italic">No future sessions scheduled.</p> : (
                        <ul className="space-y-3">
@@ -426,7 +427,7 @@ const PRPView: React.FC = () => {
                </div>
 
                {/* Alerts */}
-               <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+               <div className="card p-6">
                    <h2 className="font-bold text-lg mb-4 flex items-center text-red-600"><AlertTriangle className="mr-2"/> Overdue / Alerts</h2>
                    {missedSessions.length === 0 ? <p className="text-slate-400 italic">No overdue sessions found.</p> : (
                        <ul className="space-y-3">
@@ -449,7 +450,7 @@ const PRPView: React.FC = () => {
 
        {activeTab === 'assessment' && (
            <div className="space-y-6">
-               <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+               <div className="card p-6">
                    <h2 className="font-bold text-lg mb-6 flex items-center"><ClipboardList className="mr-2 text-slate-700"/> Individual Patient Assessment</h2>
                    
                    {/* Search Bar */}

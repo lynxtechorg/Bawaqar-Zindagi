@@ -89,28 +89,31 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 setOrganization(null);
             }
         }
-        // Note: We primarily rely on the initial check for hydration, 
+        // Note: We primarily rely on the initial check for hydration,
         // preventing double-fetches or race conditions here.
     });
-
-    // Session Keep-Alive (Refresh every 4 minutes to prevent 5-minute timeout issues)
-    const keepAliveInterval = setInterval(async () => {
-        if (currentUser) {
-            const { error } = await supabase.auth.refreshSession();
-            if (error) console.warn("Session refresh warning:", error.message);
-        }
-    }, 4 * 60 * 1000); // 4 minutes
 
     return () => {
         mounted = false;
         subscription.unsubscribe();
-        clearInterval(keepAliveInterval);
     };
-  }, [currentUser]); // Add currentUser dependency to restart interval on login
-  // Fetch all users for Admin View
+  }, []); // Run once on mount — re-running this re-fetched the profile and re-subscribed needlessly.
+
+  // Session Keep-Alive (Refresh every 4 minutes to prevent timeout issues). Only while logged in.
   useEffect(() => {
+    if (!currentUser) return;
+    const keepAliveInterval = setInterval(async () => {
+        const { error } = await supabase.auth.refreshSession();
+        if (error) console.warn("Session refresh warning:", error.message);
+    }, 4 * 60 * 1000);
+    return () => clearInterval(keepAliveInterval);
+  }, [currentUser]);
+
+  // Fetch all users for Admin View — only Admins need (or are shown) the directory.
+  useEffect(() => {
+    if (currentUser?.role !== UserRole.ADMIN) return;
     const fetchUsers = async () => {
-        const { data, error } = await supabase.from('profiles').select('*');
+        const { data } = await supabase.from('profiles').select('*');
         if (data) {
             const mappedUsers: User[] = data.map((p: any) => ({
                 id: p.id,
@@ -125,7 +128,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
     };
     fetchUsers();
-  }, []);
+  }, [currentUser]);
 
   const login = async (username: string, password: string) => {
     if (!organization) return { success: false, msg: 'Select Organization first.' };
@@ -299,13 +302,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const deleteUser = async (id: string) => {
-      await supabase.from('profiles').delete().eq('id', id);
+      // Try the privileged Edge Function (removes the actual auth account).
+      const { error } = await supabase.functions.invoke('admin-users', { body: { action: 'delete', userId: id } });
+      if (error) {
+          // Fallback: removing the profile already revokes all access (login requires a
+          // profile, and RLS denies everything without one). The orphaned auth row is
+          // cleaned up once the admin-users function is deployed.
+          console.warn("admin-users function unavailable, falling back to profile-only delete:", error.message);
+          await supabase.from('profiles').delete().eq('id', id);
+      }
       setUsers(prev => prev.filter(u => u.id !== id));
   };
 
-  const resetUserPassword = async (id: string) => {
-      alert("Backend integration required for password reset.");
-      return "password-reset-pending";
+  const resetUserPassword = async (id: string): Promise<string> => {
+      const { data, error } = await supabase.functions.invoke('admin-users', { body: { action: 'reset', userId: id } });
+      if (error || !data?.password) {
+          throw new Error(error?.message || 'Password reset requires the admin-users Edge Function to be deployed.');
+      }
+      return data.password as string;
   };
 
   return (

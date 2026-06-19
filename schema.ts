@@ -354,4 +354,29 @@ CREATE INDEX IF NOT EXISTS idx_clients_org ON clients(organization);
 CREATE INDEX IF NOT EXISTS idx_clients_cnic ON clients(cnic);
 CREATE INDEX IF NOT EXISTS idx_inventory_org ON drug_inventory(organization);
 CREATE INDEX IF NOT EXISTS idx_prescriptions_org ON prescriptions(organization);
+CREATE INDEX IF NOT EXISTS idx_prescriptions_client ON prescriptions("clientId");
+CREATE INDEX IF NOT EXISTS idx_queue_org ON patient_queue(organization);
+CREATE INDEX IF NOT EXISTS idx_logs_org ON dispense_logs(organization);
+CREATE INDEX IF NOT EXISTS idx_sessions_org ON outreach_sessions(organization);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_org ON pharmacy_feedbacks(organization);
+-- Clinical tables have no org column; the app scopes them by patient id.
+CREATE INDEX IF NOT EXISTS idx_histories_client ON clinical_histories("clientId");
+CREATE INDEX IF NOT EXISTS idx_mse_client ON mse_records("clientId");
+CREATE INDEX IF NOT EXISTS idx_mhqol_client ON mhqol_records("clientId");
+
+-- ==============================================================================
+-- 6. REALTIME (push updates for the live queue & pharmacy boards)
+--    The app subscribes to these two tables instead of polling every 10s.
+-- ==============================================================================
+DO $$
+BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.patient_queue;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.prescriptions;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+END $$;
 `;

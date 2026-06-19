@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
+import { toast } from '../lib/toast';
 import { Gender, PatientStatus, ReferenceSource, ClientProfile } from '../types';
 import { Plus, Users, MapPin, Search, CheckCircle, Navigation, Edit, Save, ArrowRight, History, Activity, Loader2, RefreshCw, Clock, X, Trash } from 'lucide-react';
 
@@ -68,7 +69,7 @@ const ReceptionistView: React.FC = () => {
 
     // VALIDATION: Check Legacy Date
     if (isLegacy && !legacyDate) {
-        alert("Please select a Registration Date for the Legacy Patient.");
+        toast.error("Please select a registration date for the legacy patient.");
         return;
     }
 
@@ -123,10 +124,11 @@ const ReceptionistView: React.FC = () => {
               });
               
               if (res.success) {
+                 toast.success('Patient profile updated.');
                  resetForm();
                  setActiveTab('lookup'); // Switch to view updated list
               } else {
-                 alert(res.msg);
+                 toast.error(res.msg);
               }
           }
     } else {
@@ -141,11 +143,11 @@ const ReceptionistView: React.FC = () => {
           }, isLegacy, legacyDate);
           
           if (res.success) {
-            // Automatically switch to list and refresh
+            toast.success(res.msg || 'Patient registered.');
             resetForm();
             setActiveTab('lookup');
           } else {
-            alert(res.msg);
+            toast.error(res.msg);
           }
     }
     setIsSubmitting(false);
@@ -222,10 +224,11 @@ const ReceptionistView: React.FC = () => {
       if (!deleteConfirm) return;
       const res = await deleteClient(deleteConfirm.id);
       if (res.success) {
+          toast.success("Patient deleted.");
           await refreshData();
       } else {
           console.error(res.msg);
-          alert("Failed to delete patient: " + res.msg);
+          toast.error("Failed to delete patient: " + res.msg);
       }
       setDeleteConfirm(null);
   };
@@ -292,7 +295,7 @@ const ReceptionistView: React.FC = () => {
           const profileRes = await updateClientProfile(updatedClient);
           
           if (!profileRes.success) {
-              alert("Failed to update patient vitals: " + profileRes.msg);
+              toast.error("Failed to update patient vitals: " + profileRes.msg);
           } else {
               // Log vitals historically
               if (vitals.temperature || vitals.pulse || vitals.respRate || vitals.bp || vitals.weight) {
@@ -314,13 +317,17 @@ const ReceptionistView: React.FC = () => {
                       date: new Date().toISOString(),
                       appearance: '',
                       behavior: '',
-                      speech: '',
+                      eyeContact: '',
+                      speechRate: '',
+                      speechVolume: '',
                       mood: '',
                       affect: '',
                       thoughtProcess: '',
                       thoughtContent: '',
                       perceptualDisturbances: '',
-                      cognition: '',
+                      orientation: '',
+                      attention: '',
+                      memory: '',
                       insight: 5,
                       judgment: ''
                   };
@@ -330,11 +337,12 @@ const ReceptionistView: React.FC = () => {
           }
           
           await addToQueue(checkInClient.id, checkInType, undefined, 'Waiting', checkInClient.name);
+          toast.success(`${checkInClient.name} checked in.`);
           setShowCheckInModal(false);
           setCheckInClient(null);
       } catch (err: any) {
           console.error("Check-in error:", err);
-          alert("An error occurred during check-in: " + err.message);
+          toast.error("An error occurred during check-in: " + err.message);
       } finally {
           setIsCheckingIn(false);
       }
@@ -351,7 +359,7 @@ const ReceptionistView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6 h-auto min-h-[calc(100vh-80px)] md:h-[calc(100vh-80px)] md:overflow-y-auto">
       {/* Action Buttons */}
-      <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-4 no-print bg-white p-2 rounded-xl shadow-sm border border-slate-200 w-full md:w-fit">
+      <div className="flex flex-col md:flex-row space-y-2 md:space-y-0 md:space-x-4 no-print card p-2 w-full md:w-fit">
         <button type="button" onClick={() => { setActiveTab('register'); resetForm(); }} className={`flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-bold transition-all ${activeTab === 'register' ? 'bg-bwz-primary text-white shadow-md' : 'text-slate-600 hover:bg-slate-50'}`}>
           <Plus size={20} /> <span>{isEditing ? 'Edit Details' : 'New Registration'}</span>
         </button>
@@ -525,7 +533,7 @@ const ReceptionistView: React.FC = () => {
       )}
 
       {activeTab === 'register' && (
-        <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-4 md:p-8">
+        <div className="card shadow-card p-4 md:p-8">
           <div className="flex justify-between items-center border-b pb-4 mb-6">
              <h2 className="text-xl md:text-2xl font-bold text-bwz-primary">{isEditing ? `Editing: ${editingId}` : 'Patient Intake'}</h2>
              {isEditing && <button type="button" onClick={resetForm} className="text-sm text-red-500 hover:underline">Cancel</button>}
@@ -827,11 +835,11 @@ const ReceptionistView: React.FC = () => {
                             onClick={() => {
                                 if (formStep === 1) {
                                     if (isRequired('name') && !formData.name) {
-                                        alert("Please enter patient name.");
+                                        toast.error("Please enter patient name.");
                                         return;
                                     }
                                     if (isRequired('age') && !formData.age) {
-                                        alert("Please enter patient age.");
+                                        toast.error("Please enter patient age.");
                                         return;
                                     }
                                 }
@@ -858,7 +866,7 @@ const ReceptionistView: React.FC = () => {
       )}
 
       {activeTab === 'lookup' && (
-        <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-4 md:p-8">
+        <div className="card shadow-card p-4 md:p-8">
            <div className="flex flex-col md:flex-row justify-between items-center mb-6 space-y-4 md:space-y-0">
              <div>
                  <h2 className="font-bold text-xl">Patient Database & Queue</h2>

@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
+import { toast } from '../lib/toast';
 import { MHQoLRecord } from '../types';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { ClipboardList, Save, History } from 'lucide-react';
@@ -116,7 +117,7 @@ const MHQoLAssessment: React.FC<Props> = ({ clientId }) => {
       totalScore: currentTotal
     };
     addMHQoLRecord(newRecord);
-    alert('MHQoL-7D Assessment Saved!');
+    toast.success('MHQoL-7D assessment saved.');
   };
 
   const chartData = clientRecords.map(r => ({
@@ -127,7 +128,7 @@ const MHQoLAssessment: React.FC<Props> = ({ clientId }) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
       {/* Form */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+      <div className="card p-6">
         <div className="flex justify-between items-center mb-6 border-b pb-4">
           <h2 className="text-xl font-bold text-slate-800 flex items-center"><ClipboardList className="mr-2 text-bwz-primary"/> New Assessment</h2>
           <div className="text-right">
@@ -167,7 +168,7 @@ const MHQoLAssessment: React.FC<Props> = ({ clientId }) => {
 
       {/* History & Analytics */}
       <div className="space-y-6">
-         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+         <div className="card p-6">
             <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center"><History className="mr-2 text-slate-500"/> MHQoL-7D Progression</h2>
             {chartData.length > 0 ? (
                <div className="h-64">
@@ -189,7 +190,7 @@ const MHQoLAssessment: React.FC<Props> = ({ clientId }) => {
          </div>
 
          {clientRecords.length > 0 && (
-             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+             <div className="card p-6">
                 <h2 className="font-bold text-slate-800 mb-4">Assessment History Log</h2>
                 <div className="space-y-3">
                    {clientRecords.slice().reverse().map(r => (

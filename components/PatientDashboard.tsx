@@ -4,7 +4,9 @@ import React, { useState, useEffect } from 'react';
 import { useData } from '../contexts/DataContext';
 import { ClientProfile, MSEData, ClinicalHistory, VitalsData } from '../types';
 import RiskBanner from './RiskBanner';
-import { Save, AlertOctagon, History, Eye, PlusCircle, Calendar, Clock, Lock, Activity, Edit } from 'lucide-react';
+import AICopilot from './ui/AICopilot';
+import { deidentify } from '../lib/ai';
+import { Save, AlertOctagon, History, Eye, PlusCircle, Calendar, Clock, Lock, Activity, Edit, Loader2, CheckCircle } from 'lucide-react';
 
 interface Props {
   client: ClientProfile;
@@ -200,6 +202,24 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
     }
   };
 
+  // Build a DE-IDENTIFIED case summary prompt for the AI copilot (no name/CNIC/contact).
+  const buildAIPrompt = () => {
+    const terms = [client.name, client.cnic, client.contact, client.emergencyContact];
+    const lines: string[] = [`Patient: ${client.age}y ${client.gender}, current status ${client.status}.`];
+    clientHistories.slice(0, 5).forEach(h => {
+      lines.push(`Visit — Diagnosis: ${h.diagnosis || 'n/a'}; Complaints: ${h.chiefComplaints || 'n/a'}; HPI: ${h.durationOfIllness || 'n/a'}.`);
+    });
+    if (clientMSEs[0]) {
+      const m = clientMSEs[0];
+      lines.push(`Latest MSE — mood: ${m.mood || 'n/a'}, affect: ${m.affect || 'n/a'}, thought process: ${m.thoughtProcess || 'n/a'}, content: ${m.thoughtContent || 'n/a'}, insight: ${m.insight}.`);
+    }
+    client.progressNotes.slice(-5).forEach(n => lines.push(`Note: ${n.note}`));
+    if (client.riskProfile?.suicidalIdeation) lines.push('Flag: active suicidal ideation.');
+    if (client.riskProfile?.homicidalIntent) lines.push('Flag: active homicidal intent.');
+    const body = deidentify(lines.join('\n'), terms);
+    return `You are a psychiatric clinical assistant. Summarize this de-identified case in 4-6 concise bullet points covering: primary diagnosis, clinical course, current mental state, risk factors, and a suggested follow-up focus. Be factual and do not invent details.\n\n${body}`;
+  };
+
   const updateMSE = (field: keyof MSEData, value: any) => {
       setFormData(prev => ({ ...prev, mse: { ...prev.mse, [field]: value } }));
   };
@@ -246,7 +266,7 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
       {/* VITALS & MHQOL PROGRESS ROW (Upgrades 4 & 5) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* VITALS SNAPSHOT SECTION */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 animate-fade-in flex flex-col justify-between">
+          <div className="card p-5 animate-fade-in flex flex-col justify-between">
             <div>
                 <h3 className="font-bold text-slate-700 mb-3 flex flex-row items-center justify-between text-sm uppercase tracking-wider w-full">
                     <div className="flex items-center"><Activity className="mr-2 text-teal-600" size={18}/> Triage Vitals Guardrails</div>
@@ -349,7 +369,7 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
           </div>
 
           {/* MHQOL TREATMENT PROGRESS TRACKER */}
-          <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 animate-fade-in flex flex-col justify-between">
+          <div className="card p-5 animate-fade-in flex flex-col justify-between">
              {clientQoLs.length < 2 ? (
                  <div className="p-5 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-center text-slate-400 text-xs flex flex-col justify-center items-center h-full">
                      <span className="text-xl mb-1">📈</span>
@@ -425,7 +445,7 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
         <div className="xl:col-span-3 space-y-6">
           
           {/* Header & Actions */}
-          <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+          <div className="flex justify-between items-center card p-4">
               <div className="flex items-center">
                   {viewMode === 'NEW' ? (
                       <div className="bg-bwz-primary text-white p-2 rounded-lg mr-3"><PlusCircle size={20}/></div>
@@ -439,6 +459,9 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
                       <p className="text-xs text-slate-500">
                           {viewMode === 'NEW' ? new Date().toLocaleDateString() + ' (Today)' : new Date(formData.mse.date).toLocaleString()}
                       </p>
+                  </div>
+                  <div className="ml-4">
+                      <AICopilot buildPrompt={buildAIPrompt} />
                   </div>
               </div>
 
@@ -471,7 +494,7 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
           </div>
 
           {/* Clinical History Section */}
-          <div className={`bg-white p-6 rounded-xl shadow border border-slate-200 relative ${viewMode === 'VIEW' ? 'opacity-90 bg-slate-50' : ''}`}>
+          <div className={`card p-6 relative ${viewMode === 'VIEW' ? 'opacity-90 bg-slate-50' : ''}`}>
              <h2 className="text-lg font-bold text-medical-900 mb-4 border-b pb-2 flex items-center">
                 <History className="mr-2"/> Clinical History & Diagnosis
              </h2>
@@ -554,7 +577,7 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
           </div>
 
           {/* MSE Section */}
-          <div className={`bg-white p-6 rounded-xl shadow border border-slate-200 relative ${viewMode === 'VIEW' ? 'opacity-90 bg-slate-50' : ''}`}>
+          <div className={`card p-6 relative ${viewMode === 'VIEW' ? 'opacity-90 bg-slate-50' : ''}`}>
             <h2 className="text-lg font-bold text-medical-900 mb-6 border-b pb-4 flex items-center">
                 <Eye className="mr-2"/> Mental State Examination (MSE)
             </h2>
@@ -630,7 +653,7 @@ const PatientDashboard: React.FC<Props> = ({ client, isEditable = false }) => {
         </div>
 
         {/* RIGHT COLUMN: HISTORY SIDEBAR (1/4 width) */}
-        <div className="xl:col-span-1 bg-white pt-4 rounded-xl shadow border border-slate-200 h-[calc(100vh-200px)] overflow-hidden flex flex-col">
+        <div className="xl:col-span-1 card pt-4 h-[calc(100vh-200px)] overflow-hidden flex flex-col">
             <div className="flex border-b border-slate-200 px-4 mb-4">
                 <button 
                   onClick={() => setHistoryTab('Consultations')} 

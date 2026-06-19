@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { ClientProfile, ClinicalHistory, MSEData, RehabMetrics, Drug, Prescription, OutreachSession, Gender, PatientStatus, ProgressNote, Organization, User, UserRole, EmployeePerformance, QueueItem, DispenseLogEntry, MHQoLRecord, PharmacyFeedback, PerformanceBadge } from '../types';
 import { useAuth } from './AuthContext';
 import { supabase } from '../lib/supabase';
+import { toast } from '../lib/toast';
 
 interface DataContextType {
   clients: ClientProfile[];
@@ -34,7 +35,7 @@ interface DataContextType {
   addMHQoLRecord: (record: MHQoLRecord) => Promise<void>;
 
   // Queue Actions
-  addToQueue: (clientId: string, type: 'New' | 'Follow-up', notes?: string, status?: 'Waiting' | 'In-Consultation' | 'Completed') => Promise<void>;
+  addToQueue: (clientId: string, type: 'New' | 'Follow-up', notes?: string, status?: 'Waiting' | 'In-Consultation' | 'Completed', patientNameFallback?: string) => Promise<void>;
   removeFromQueue: (queueId: string) => Promise<void>;
   updateQueueStatus: (queueId: string, status: 'Waiting' | 'In-Consultation' | 'Completed') => Promise<void>;
 
@@ -70,6 +71,28 @@ const KARACHI_AREAS = [
   "Clifton", "Baldia Town", "Bin Qasim", "Gadap", "Keamari", "Jamshed Road", "PECHS", "Defence View"
 ];
 
+const cleanHistoryForDb = (history: any) => {
+  const allowed = ['id', 'clientId', 'diagnosis', 'chiefComplaints', 'durationOfIllness', 'familyHistory', 'pastPsychMedicalHistory', 'substanceAbuseHistory'];
+  const clean: any = {};
+  allowed.forEach(key => {
+    if (history[key] !== undefined) {
+      clean[key] = history[key];
+    }
+  });
+  return clean;
+};
+
+const cleanMseForDb = (mse: any) => {
+  const allowed = ['id', 'clientId', 'date', 'appearance', 'behavior', 'eyeContact', 'speechRate', 'speechVolume', 'mood', 'affect', 'thoughtProcess', 'thoughtContent', 'perceptualDisturbances', 'orientation', 'attention', 'memory', 'insight', 'judgment'];
+  const clean: any = {};
+  allowed.forEach(key => {
+    if (mse[key] !== undefined) {
+      clean[key] = mse[key];
+    }
+  });
+  return clean;
+};
+
 export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { organization, currentUser, isLoading } = useAuth();
   
@@ -86,97 +109,126 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [allFeedbacks, setAllFeedbacks] = useState<PharmacyFeedback[]>([]);
   const [locations] = useState<string[]>(KARACHI_AREAS);
 
+  // Parse the legacy "[DIAGNOSIS:..][VITALS:..]" prefix that older rows store inside chiefComplaints.
+  const parseHistoryRow = (h: any) => {
+      let diagnosis = h.diagnosis || '';
+      let chiefComplaints = h.chiefComplaints || '';
+      let vitals: any = undefined;
+      const match = chiefComplaints.match(/^\[DIAGNOSIS:(.*?)\]\n?/);
+      if (match) {
+          diagnosis = match[1];
+          chiefComplaints = chiefComplaints.replace(/^\[DIAGNOSIS:.*?\]\n?/, '');
+      }
+      const vitalsMatch = chiefComplaints.match(/^\[VITALS:(.*?)\]\n?/);
+      if (vitalsMatch) {
+          try { vitals = JSON.parse(vitalsMatch[1]); } catch (e) { console.error("Vitals parsing error:", e); }
+          chiefComplaints = chiefComplaints.replace(/^\[VITALS:.*?\]\n?/, '');
+      }
+      return { ...h, diagnosis, chiefComplaints, vitals };
+  };
+
+  // PostgREST has a URL-length limit, so fetch clinical tables (which have no org
+  // column) by chunking the patient-id list rather than pulling every row in the DB.
+  const fetchByClientIds = async (table: string, clientIds: string[]) => {
+      if (clientIds.length === 0) return [];
+      const CHUNK = 150;
+      const chunks: string[][] = [];
+      for (let i = 0; i < clientIds.length; i += CHUNK) chunks.push(clientIds.slice(i, i + CHUNK));
+      const results = await Promise.all(
+          chunks.map(ids => supabase.from(table).select('*').in('clientId', ids))
+      );
+      return results.flatMap(r => r.data || []);
+  };
+
+  // Lightweight refetchers used by the realtime subscription and the reconcile tick.
+  const refetchQueue = () => {
+      if (!organization) return;
+      supabase.from('patient_queue').select('*').eq('organization', organization)
+          .then(({ data }) => { if (data) setAllQueue(data as any); });
+  };
+  const refetchPrescriptions = () => {
+      if (!organization) return;
+      supabase.from('prescriptions').select('*').eq('organization', organization)
+          .then(({ data }) => { if (data) setAllPrescriptions(data as any); });
+  };
+
   // --- DATA LOADING ---
   const fetchData = async () => {
     // SECURITY GATE: Only fetch when organization is selected AND Auth is done loading
     if (!organization || isLoading) return;
 
-    // Fetch clients for this org — get their IDs for filtering related tables
-    const { data: clientData, error: clientError } = await supabase
-        .from('clients')
-        .select('*')
-        .eq('organization', organization)
-        .order('created_at', { ascending: false });
-    
-    if (clientError) console.error("Error fetching clients:", clientError);
-    if (clientData) setAllClients(clientData as any);
+    try {
+        // Clients first — their ids scope the clinical tables below.
+        const { data: clientData, error: clientError } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('organization', organization)
+            .order('created_at', { ascending: false });
 
-    // Build list of client IDs for this org — used to filter related tables safely
-    const orgClientIds = (clientData || []).map((c: any) => c.id);
+        if (clientError) console.error("Error fetching clients:", clientError);
+        const clientList = (clientData as ClientProfile[]) || [];
+        if (clientData) setAllClients(clientList);
+        const clientIds = clientList.map(c => c.id);
 
-    const { data: invData } = await supabase.from('drug_inventory').select('*').eq('organization', organization);
-    if (invData) setAllInventory(invData as any);
+        // All org-scoped tables in parallel.
+        const [inv, rx, q, sess, feed, logs] = await Promise.all([
+            supabase.from('drug_inventory').select('*').eq('organization', organization),
+            supabase.from('prescriptions').select('*').eq('organization', organization),
+            supabase.from('patient_queue').select('*').eq('organization', organization),
+            supabase.from('outreach_sessions').select('*').eq('organization', organization),
+            supabase.from('pharmacy_feedbacks').select('*').eq('organization', organization),
+            supabase.from('dispense_logs').select('*').eq('organization', organization),
+        ]);
+        if (inv.data) setAllInventory(inv.data as any);
+        if (rx.data) setAllPrescriptions(rx.data as any);
+        if (q.data) setAllQueue(q.data as any);
+        if (sess.data) setAllSessions(sess.data as any);
+        if (feed.data) setAllFeedbacks(feed.data as any);
+        if (logs.data) setDispenseLogs(logs.data as any);
 
-    const { data: rxData } = await supabase.from('prescriptions').select('*').eq('organization', organization);
-    if (rxData) setAllPrescriptions(rxData as any);
-
-    const { data: qData } = await supabase.from('patient_queue').select('*').eq('organization', organization);
-    if (qData) setAllQueue(qData as any);
-    
-    // FIX: clinical_histories has no organization column — filter by client IDs of this org only
-    if (orgClientIds.length > 0) {
-      const { data: histData } = await supabase
-          .from('clinical_histories')
-          .select('*')
-          .in('clientId', orgClientIds);
-      if (histData) {
-          const parsedHistData = histData.map(h => {
-              let diagnosis = h.diagnosis || '';
-              let chiefComplaints = h.chiefComplaints || '';
-              const match = chiefComplaints.match(/^\[DIAGNOSIS:(.*?)\]\n/);
-              if (match) {
-                  diagnosis = match[1];
-                  chiefComplaints = chiefComplaints.replace(/^\[DIAGNOSIS:.*?\]\n/, '');
-              }
-              return { ...h, diagnosis, chiefComplaints };
-          });
-          setHistories(parsedHistData as any);
-      }
-    } else {
-      setHistories([]);
+        // Clinical tables (no org column) scoped to this org's patients.
+        const [histData, mseData, mhqData] = await Promise.all([
+            fetchByClientIds('clinical_histories', clientIds),
+            fetchByClientIds('mse_records', clientIds),
+            fetchByClientIds('mhqol_records', clientIds),
+        ]);
+        setHistories(histData.map(parseHistoryRow) as any);
+        setMseRecords(mseData as any);
+        setMhqolRecords(mhqData as any);
+    } catch (err) {
+        console.error("Network error fetching data:", err);
     }
-
-    // FIX: mse_records has no organization column — filter by client IDs of this org only
-    if (orgClientIds.length > 0) {
-      const { data: mseData } = await supabase
-          .from('mse_records')
-          .select('*')
-          .in('clientId', orgClientIds);
-      if (mseData) setMseRecords(mseData as any);
-    } else {
-      setMseRecords([]);
-    }
-    
-    const { data: sessData } = await supabase.from('outreach_sessions').select('*').eq('organization', organization);
-    if (sessData) setAllSessions(sessData as any);
-
-    // FIX: dispense_logs — filter by organization. Also fetch legacy null-org entries via prescription IDs.
-    const orgRxIds = (rxData || []).map((r: any) => r.id);
-    const { data: logsData } = await supabase.from("dispense_logs").select("*").eq("organization", organization);
-    const legacyLogsResult = orgRxIds.length > 0
-        ? await supabase.from("dispense_logs").select("*").is("organization", null).in("prescriptionId", orgRxIds)
-        : { data: [] };
-    const combinedLogs = [...(logsData || []), ...(legacyLogsResult.data || [])];
-    setDispenseLogs(combinedLogs as any);
-    
-    // FIX: mhqol_records has no organization column — filter by client IDs of this org only
-    if (orgClientIds.length > 0) {
-      const { data: mhqData } = await supabase
-          .from('mhqol_records')
-          .select('*')
-          .in('clientId', orgClientIds);
-      if (mhqData) setMhqolRecords(mhqData as any);
-    } else {
-      setMhqolRecords([]);
-    }
-    
-    const { data: feedData } = await supabase.from('pharmacy_feedbacks').select('*').eq('organization', organization);
-    if (feedData) setAllFeedbacks(feedData as any);
   };
 
   useEffect(() => {
+    if (!organization || isLoading) return;
+
     fetchData();
-  }, [organization, isLoading, currentUser]); // Added currentUser to ensure re-fetch on login/session restore
+
+    // Push-based live updates for the two tables that actually change minute-to-minute,
+    // replacing the old 10s full-table polling loop. (Requires the tables to be in the
+    // `supabase_realtime` publication — see schema.ts.)
+    const channel = supabase
+        .channel(`org-live-${organization}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'patient_queue', filter: `organization=eq.${organization}` }, refetchQueue)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'prescriptions', filter: `organization=eq.${organization}` }, refetchPrescriptions)
+        .subscribe();
+
+    // Safety-net reconcile: catches any missed realtime events, but only while the tab
+    // is visible and at a 60s cadence (vs. the old 10s) — ~95% fewer idle requests.
+    const interval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+            refetchQueue();
+            refetchPrescriptions();
+        }
+    }, 60000);
+
+    return () => {
+        supabase.removeChannel(channel);
+        clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [organization, isLoading]);
 
   // --- FILTERED DATA (Local derived state for speed) ---
   const clients = allClients; 
@@ -184,7 +236,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const prescriptions = allPrescriptions;
   const sessions = allSessions;
   
-  // Filter queue to only show today's items (Clears every 24 hours)
+  // Filter queue to only show today's items (Clears every night at 12 AM to start fresh)
   const patientQueue = allQueue.filter(q => {
       // Try to parse timestamp from ID (Q-TIMESTAMP)
       const parts = q.id.split('-');
@@ -193,12 +245,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (!isNaN(timestamp)) {
               const date = new Date(timestamp);
               const today = new Date();
+              // A more resilient "today" check: if within 18 hours, it's definitely today's active session!
+              const hoursDiff = Math.abs(today.getTime() - date.getTime()) / (1000 * 60 * 60);
+              if (hoursDiff <= 18) {
+                  return true;
+              }
               return date.getDate() === today.getDate() && 
                      date.getMonth() === today.getMonth() && 
                      date.getFullYear() === today.getFullYear();
           }
       }
-      return false; 
+      // Keep any queue item that doesn't fit the Q-timestamp format to avoid throwing live database items away
+      return true; 
   });
 
   const pharmacyFeedbacks = allFeedbacks;
@@ -227,6 +285,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
     
     try {
+        // Find the current highest sequence for this org/year as a starting point.
         const { data: latest } = await supabase
             .from('clients')
             .select('id')
@@ -234,48 +293,51 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             .ilike('id', `${organization}-${idYear}-%`)
             .order('created_at', { ascending: false })
             .limit(1);
-        
+
         let sequence = 1;
         if (latest && latest.length > 0) {
-            const lastId = latest[0].id;
-            const parts = lastId.split('-');
+            const parts = latest[0].id.split('-');
             if (parts.length === 3) {
                 const lastSeq = parseInt(parts[2]);
                 if (!isNaN(lastSeq)) sequence = lastSeq + 1;
             }
         }
-        
-        const seqStr = sequence.toString().padStart(3, '0');
-        const newId = `${organization}-${idYear}-${seqStr}`;
 
-        const clientWithOrg: ClientProfile = { 
-            ...clientData, 
-            id: newId,
-            organization,
-            isLegacy,
-            registrationDate: isLegacy && legacyDate ? legacyDate : new Date().toISOString(),
-            registeredBy: currentUser?.username || 'Unknown' 
-        };
+        // Retry loop: if two receptionists register at once, the loser hits a
+        // duplicate-key error, bumps the sequence, and tries again.
+        const MAX_ATTEMPTS = 5;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            const newId = `${organization}-${idYear}-${sequence.toString().padStart(3, '0')}`;
+            const clientWithOrg: ClientProfile = {
+                ...clientData,
+                id: newId,
+                organization,
+                isLegacy,
+                registrationDate: isLegacy && legacyDate ? legacyDate : new Date().toISOString(),
+                registeredBy: currentUser?.username || 'Unknown'
+            };
 
-        // Optimistic Update
-        setAllClients(prev => [clientWithOrg, ...prev]);
+            const { error } = await supabase.from('clients').insert([clientWithOrg]);
 
-        const { error } = await supabase.from('clients').insert([clientWithOrg]);
-        
-        if (error) {
+            if (!error) {
+                setAllClients(prev => [clientWithOrg, ...prev]); // Optimistic add (no full refetch needed)
+                return { success: true, msg: `Patient Profile Created. Assigned ID: ${newId}` };
+            }
+
+            const isDuplicate = error.code === '23505' || /duplicate key|already exists/i.test(error.message);
+            if (isDuplicate) {
+                sequence++; // Someone took this ID — try the next one.
+                continue;
+            }
+
             console.error("Supabase Insert Error:", error);
-            // Revert optimistic update if failed
-            setAllClients(prev => prev.filter(c => c.id !== newId));
             if (error.message.includes('column') && error.message.includes('does not exist')) {
-                 return { success: false, msg: 'Database Schema Error: Missing columns. Please run the SQL Update Script.' };
+                return { success: false, msg: 'Database Schema Error: Missing columns. Please run the SQL Update Script.' };
             }
             return { success: false, msg: 'Database Error: ' + error.message };
         }
-        
-        // Background fetch to ensure consistency
-        fetchData();
-        return { success: true, msg: `Patient Profile Created. Assigned ID: ${newId}` };
 
+        return { success: false, msg: 'Could not assign a unique patient ID after several attempts. Please retry.' };
     } catch (err: any) {
         console.error("Add Client Exception:", err);
         return { success: false, msg: 'System Error: ' + err.message };
@@ -283,11 +345,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const updateClientProfile = async (client: ClientProfile) => {
+    // Optimistic Update
+    setAllClients(prev => prev.map(c => c.id === client.id ? client : c));
+    
     const { error } = await supabase.from('clients').update(client).eq('id', client.id);
     if (!error) {
-        await fetchData();
         return { success: true, msg: 'Patient Profile Updated' };
     }
+    
+    console.error("DEBUG UpdateClient Error", error);
+    // Revert if error
+    await fetchData(); 
     return { success: false, msg: 'Update Failed: ' + error.message };
   };
 
@@ -324,16 +392,23 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const newHistoryId = `H-${timestamp}`;
     const newMseId = `MSE-${timestamp}`;
 
-    const { diagnosis, ...restHistory } = history;
+    const { diagnosis, vitals, ...restHistory } = history;
+    const currentClient = clients.find(c => c.id === history.clientId);
+    const actualVitals = vitals || currentClient?.vitals;
+    const vitalsStr = actualVitals ? `[VITALS:${JSON.stringify(actualVitals)}]\n` : '';
+
     const logHistory = { 
         ...restHistory, 
         id: newHistoryId,
-        chiefComplaints: `[DIAGNOSIS:${diagnosis || ''}]\n${restHistory.chiefComplaints}`
+        chiefComplaints: `[DIAGNOSIS:${diagnosis || ''}]\n${vitalsStr}${restHistory.chiefComplaints}`
     };
     const logMse = { ...mse, id: newMseId, date: new Date().toISOString() };
 
-    const { error: hErr } = await supabase.from('clinical_histories').insert([logHistory]);
-    const { error: mErr } = await supabase.from('mse_records').insert([logMse]);
+    const cleanLogHistory = cleanHistoryForDb(logHistory);
+    const cleanLogMse = cleanMseForDb(logMse);
+
+    const { error: hErr } = await supabase.from('clinical_histories').insert([cleanLogHistory]);
+    const { error: mErr } = await supabase.from('mse_records').insert([cleanLogMse]);
 
     if (hErr || mErr) {
         console.error("Failed to save consultation", hErr, mErr);
@@ -341,35 +416,107 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return;
     }
 
-    setHistories(prev => [...prev, { ...history, id: newHistoryId }]);
+    setHistories(prev => [...prev, { ...history, vitals: actualVitals, id: newHistoryId }]);
     setMseRecords(prev => [...prev, logMse]);
     
     const client = clients.find(c => c.id === history.clientId);
     if (client) {
-        const updated = { ...client, lastVisitDate: new Date().toISOString() };
+        const textToAnalyze = `${history.chiefComplaints} ${history.durationOfIllness} ${history.pastPsychMedicalHistory} ${mse.thoughtContent} ${mse.thoughtProcess}`.toLowerCase();
+        
+        const suicidalKeywords = ["suicid", "kill myself", "kill himself", "kill herself", "end my life", "end his life", "end her life", "self harm", "self-harm", "hanging", "overdose", "poison"];
+        const homicidalKeywords = ["homicid", "kill others", "kill her", "kill him", "harm others", "murder", "intent to kill"];
+        
+        let suicidalIdeation = client.riskProfile?.suicidalIdeation || false;
+        let homicidalIntent = client.riskProfile?.homicidalIntent || false;
+        let changed = false;
+        
+        if (suicidalKeywords.some(keyword => textToAnalyze.includes(keyword))) {
+            suicidalIdeation = true;
+            changed = true;
+        }
+        if (homicidalKeywords.some(keyword => textToAnalyze.includes(keyword))) {
+            homicidalIntent = true;
+            changed = true;
+        }
+
+        const updatedRiskProfile = {
+            suicidalIdeation,
+            homicidalIntent,
+            lastAssessmentDate: changed ? new Date().toLocaleDateString() : (client.riskProfile?.lastAssessmentDate || ''),
+            safetyPlanGenerated: client.riskProfile?.safetyPlanGenerated || false
+        };
+
+        const updated = { 
+            ...client, 
+            vitals: actualVitals,
+            lastVisitDate: new Date().toISOString(),
+            riskProfile: updatedRiskProfile
+        };
         await updateClientProfile(updated);
     }
   };
 
   const updateConsultation = async (history: ClinicalHistory, mse: MSEData) => {
-    const { diagnosis, ...restHistory } = history;
+    const { diagnosis, vitals, ...restHistory } = history;
+    const currentClient = clients.find(c => c.id === history.clientId);
+    const actualVitals = vitals || currentClient?.vitals;
+    const vitalsStr = actualVitals ? `[VITALS:${JSON.stringify(actualVitals)}]\n` : '';
+
     const dbHistory = {
         ...restHistory,
-        chiefComplaints: `[DIAGNOSIS:${diagnosis || ''}]\n${restHistory.chiefComplaints}`
+        chiefComplaints: `[DIAGNOSIS:${diagnosis || ''}]\n${vitalsStr}${restHistory.chiefComplaints}`
     };
 
-    const { error: hErr } = await supabase.from('clinical_histories').update(dbHistory).eq('id', history.id);
-    const { error: mErr } = await supabase.from('mse_records').update(mse).eq('id', mse.id);
+    const cleanDbHistory = cleanHistoryForDb(dbHistory);
+    const cleanDbMse = cleanMseForDb(mse);
+
+    const { error: hErr } = await supabase.from('clinical_histories').update(cleanDbHistory).eq('id', history.id);
+    const { error: mErr } = await supabase.from('mse_records').update(cleanDbMse).eq('id', mse.id);
 
     if (hErr || mErr) {
         console.error("Failed to update consultation", hErr, mErr);
         console.error("Error updating consultation data in database.");
-        alert("Failed to update consultation. Please check database permissions.");
+        toast.error("Failed to update consultation. Please check database permissions.");
         return;
     }
 
-    setHistories(prev => prev.map(h => h.id === history.id ? history : h));
+    setHistories(prev => prev.map(h => h.id === history.id ? { ...history, vitals: actualVitals } : h));
     setMseRecords(prev => prev.map(m => m.id === mse.id ? mse : m));
+
+    const client = clients.find(c => c.id === history.clientId);
+    if (client) {
+        const textToAnalyze = `${history.chiefComplaints} ${history.durationOfIllness} ${history.pastPsychMedicalHistory} ${mse.thoughtContent} ${mse.thoughtProcess}`.toLowerCase();
+        
+        const suicidalKeywords = ["suicid", "kill myself", "kill himself", "kill herself", "end my life", "end his life", "end her life", "self harm", "self-harm", "hanging", "overdose", "poison"];
+        const homicidalKeywords = ["homicid", "kill others", "kill her", "kill him", "harm others", "murder", "intent to kill"];
+        
+        let suicidalIdeation = client.riskProfile?.suicidalIdeation || false;
+        let homicidalIntent = client.riskProfile?.homicidalIntent || false;
+        let changed = false;
+        
+        if (suicidalKeywords.some(keyword => textToAnalyze.includes(keyword))) {
+            suicidalIdeation = true;
+            changed = true;
+        }
+        if (homicidalKeywords.some(keyword => textToAnalyze.includes(keyword))) {
+            homicidalIntent = true;
+            changed = true;
+        }
+
+        const updatedRiskProfile = {
+            suicidalIdeation,
+            homicidalIntent,
+            lastAssessmentDate: changed ? new Date().toLocaleDateString() : (client.riskProfile?.lastAssessmentDate || ''),
+            safetyPlanGenerated: client.riskProfile?.safetyPlanGenerated || false
+        };
+
+        const updated = { 
+            ...client, 
+            vitals: actualVitals,
+            riskProfile: updatedRiskProfile
+        };
+        await updateClientProfile(updated);
+    }
   };
 
   const addProgressNote = async (clientId: string, note: string) => {
@@ -383,11 +530,41 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const client = clients.find(c => c.id === clientId);
     if (client) {
         const updatedNotes = [...client.progressNotes, newNote];
-        const { error } = await supabase.from('clients').update({ progressNotes: updatedNotes }).eq('id', clientId);
+        
+        const lowerNote = note.toLowerCase();
+        const suicidalKeywords = ["suicid", "kill myself", "kill himself", "kill herself", "end my life", "end his life", "end her life", "self harm", "self-harm", "hanging", "overdose", "poison"];
+        const homicidalKeywords = ["homicid", "kill others", "kill her", "kill him", "harm others", "murder", "intent to kill"];
+        
+        let suicidalIdeation = client.riskProfile?.suicidalIdeation || false;
+        let homicidalIntent = client.riskProfile?.homicidalIntent || false;
+        let changed = false;
+        
+        if (suicidalKeywords.some(keyword => lowerNote.includes(keyword))) {
+            suicidalIdeation = true;
+            changed = true;
+        }
+        if (homicidalKeywords.some(keyword => lowerNote.includes(keyword))) {
+            homicidalIntent = true;
+            changed = true;
+        }
+        
+        const updatedRiskProfile = {
+            suicidalIdeation,
+            homicidalIntent,
+            lastAssessmentDate: changed ? new Date().toLocaleDateString() : (client.riskProfile?.lastAssessmentDate || ''),
+            safetyPlanGenerated: client.riskProfile?.safetyPlanGenerated || false
+        };
+        
+        const payload: any = { progressNotes: updatedNotes };
+        if (changed) {
+            payload.riskProfile = updatedRiskProfile;
+        }
+
+        const { error } = await supabase.from('clients').update(payload).eq('id', clientId);
         if(!error) {
-             setAllClients(prev => prev.map(c => c.id === clientId ? { ...c, progressNotes: updatedNotes } : c));
+             setAllClients(prev => prev.map(c => c.id === clientId ? { ...c, progressNotes: updatedNotes, riskProfile: changed ? updatedRiskProfile : c.riskProfile } : c));
         } else {
-            alert("Failed to save progress note.");
+            toast.error("Failed to save progress note.");
         }
     }
   };
@@ -404,15 +581,36 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!error) {
           setMhqolRecords(prev => [...prev, record]);
       } else {
-          alert("Failed to save MHQoL assessment.");
+          toast.error("Failed to save MHQoL assessment.");
       }
   };
 
   // --- QUEUE ---
-  const addToQueue = async (clientId: string, type: 'New' | 'Follow-up', notes?: string, status: 'Waiting' | 'In-Consultation' | 'Completed' = 'Waiting') => {
+  const addToQueue = async (
+      clientId: string, 
+      type: 'New' | 'Follow-up', 
+      notes?: string, 
+      status: 'Waiting' | 'In-Consultation' | 'Completed' = 'Waiting',
+      patientNameFallback?: string
+  ) => {
       if (!organization) return;
-      const client = clients.find(c => c.id === clientId);
-      if (!client) return;
+      
+      // Fallback matching: Lookup in active clients or allClients or database
+      let client = allClients.find(c => c.id === clientId);
+      let name = client?.name || patientNameFallback;
+      
+      if (!name) {
+          // If still not found (state updates lagging), fetch directly from Supabase to prevent error
+          const { data } = await supabase.from('clients').select('name, organization').eq('id', clientId).single();
+          if (data) {
+              name = data.name;
+          }
+      }
+
+      if (!name) {
+          console.error("Queue insert failed: Patient name not resolved for ID", clientId);
+          return;
+      }
 
       // Prevent duplicates in TODAY'S queue
       // We use the filtered 'patientQueue' which only contains today's items
@@ -421,31 +619,41 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (status !== 'Waiting' && existing.status !== status) {
               await updateQueueStatus(existing.id, status);
           } else if (status === 'Waiting') {
-              alert("Patient is already in the active queue for today.");
+              console.log("Patient is already in the queue.");
           }
           return;
       }
 
-      const newItem: QueueItem = {
+      // Queue should ALWAYS use the current organization, because the queue represents the physical/current waiting room
+      const targetOrg = organization;
+
+      const newItem: any = {
           id: `Q-${Date.now()}`,
           patientId: clientId,
-          patientName: client.name,
-          organization,
+          organization: targetOrg,
           type,
           arrivalTime: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
           status
       };
       
+      // If the schema supports patientName, add it. (Sending it might fail if table isn't updated)
+      newItem.patientName = name;
+
       // Optimistic Update - Append to allQueue, the derived patientQueue will pick it up
       setAllQueue(prev => [...prev, newItem]);
 
       const { error } = await supabase.from('patient_queue').insert([newItem]);
       if (error) {
-          console.error("Queue Insert Error", error);
+          console.error("Queue Insert Error:", error);
+          if (error.message.includes('patientName')) {
+             // Fallback for older schemas lacking patientName column
+             delete newItem.patientName;
+             const { error: retryError } = await supabase.from('patient_queue').insert([newItem]);
+             if (!retryError) return; // Succeeded on retry
+          }
           setAllQueue(prev => prev.filter(q => q.id !== newItem.id)); // Revert
-          alert("Failed to add to queue.");
+          console.error(`Failed to add patient to queue in DB. Details: ${error.message}`);
       } 
-      // Removed fetchData() to prevent race condition where stale DB data overwrites optimistic update
   };
 
   const removeFromQueue = async (queueId: string) => {
@@ -456,9 +664,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const updateQueueStatus = async (queueId: string, status: 'Waiting' | 'In-Consultation' | 'Completed') => {
+      // Optimistic update
+      setAllQueue(prev => prev.map(q => q.id === queueId ? { ...q, status } : q));
       const { error } = await supabase.from('patient_queue').update({ status }).eq('id', queueId);
-      if (!error) {
-          setAllQueue(prev => prev.map(q => q.id === queueId ? { ...q, status } : q));
+      if (error) {
+          // If error, polling will fix it shortly, but we could notify
+          console.error("Failed to update queue status", error);
       }
   };
 
@@ -481,6 +692,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     let alerts: string[] = [];
     const inventoryClone = JSON.parse(JSON.stringify(allInventory)) as Drug[];
     const newLogs: DispenseLogEntry[] = [];
+    const changedDrugIds = new Set<string>();
     let transactionSuccess = true;
 
     for (const item of rx.items) {
@@ -498,6 +710,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       drug.currentStock -= item.quantityToDispense;
+      changedDrugIds.add(drug.id);
+
+      // FEFO: deplete physical batches first-expiry-first so batch/expiry data stays
+      // in sync with currentStock, and emptied batches are removed.
+      let remaining = item.quantityToDispense;
+      drug.batches = (drug.batches || []).sort(
+          (a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime()
+      );
+      for (const batch of drug.batches) {
+          if (remaining <= 0) break;
+          const take = Math.min(batch.quantity, remaining);
+          batch.quantity -= take;
+          remaining -= take;
+      }
+      drug.batches = drug.batches.filter(b => b.quantity > 0);
+
       if (drug.currentStock < (drug.reorderLevel || 10)) alerts.push(`Low Stock: ${drug.name}`);
 
       newLogs.push({
@@ -514,9 +742,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (!transactionSuccess) return { success: false, alerts };
 
-    for (const drug of inventoryClone) {
-        await supabase.from('drug_inventory').update({ currentStock: drug.currentStock, batches: drug.batches }).eq('id', drug.id);
-    }
+    // Only write the drugs that actually changed, and do it concurrently.
+    const drugsToUpdate = inventoryClone.filter(d => changedDrugIds.has(d.id));
+    await Promise.all(drugsToUpdate.map(drug =>
+        supabase.from('drug_inventory').update({ currentStock: drug.currentStock, batches: drug.batches }).eq('id', drug.id)
+    ));
     const { error: rxErr } = await supabase.from('prescriptions').update({ status: 'Dispensed' }).eq('id', rxId);
     if (rxErr) {
         return { success: false, alerts: ["Failed to update Rx status"]};
@@ -537,9 +767,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setAllInventory(inventoryClone);
     setAllPrescriptions(prev => prev.map(p => p.id === rxId ? { ...p, status: 'Dispensed' } : p));
     setDispenseLogs(prev => [...prev, ...newLogs]);
-
-    // Background sync
-    fetchData();
 
     return { success: true, alerts };
   };
@@ -565,7 +792,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (!error) setAllInventory(prev => prev.filter(d => d.id !== drug.id));
     }
     
-    if (error) alert("Inventory Action Failed: " + error.message);
+    if (error) toast.error("Inventory Action Failed: " + error.message);
   };
 
   const restockInventory = async (drugId: string, qty: number, batchInfo: {expiry: string, cost: number}) => {
@@ -583,7 +810,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!error) {
         setAllInventory(prev => prev.map(d => d.id === drugId ? updatedDrug : d));
     } else {
-        alert("Restock failed");
+        toast.error("Restock failed");
     }
   };
 
@@ -607,7 +834,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (!error) {
         setAllSessions(prev => [...prev, sessionWithOrg]);
     } else {
-        alert("Failed to log session: " + error.message);
+        toast.error("Failed to log session: " + error.message);
     }
   };
 
@@ -697,8 +924,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           // Registrations (Productivity)
           const myRegs = allClients.filter(c => c.registeredBy === user.username);
           productivity = Math.min(100, (myRegs.length / 5) * 100);
-          
-          quality = 100; // Placeholder until data entry quality metrics are defined
+
+          // Quality = how completely the front desk fills out each patient record.
+          const completeness = (c: ClientProfile) =>
+              [c.cnic, c.contact, c.area, c.emergencyContact, c.age, c.gender, c.education].filter(Boolean).length;
+          const MAX_FIELDS = 7;
+          quality = myRegs.length > 0
+              ? Math.round((myRegs.reduce((a, c) => a + completeness(c), 0) / (myRegs.length * MAX_FIELDS)) * 100)
+              : 0;
           impact = Math.min(100, (myRegs.length / 5) * 100);
           
           history = mapToHistory(myRegs.map(c => c.registrationDate));
@@ -732,6 +965,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       let ratingLabel = "No Data";
       if (overallScore > 0) {
         ratingLabel = overallScore >= 90 ? "Top Performer" : overallScore >= 75 ? "Exceeding Expectations" : "Needs Improvement";
+      }
+
+      // Automated coaching tips (drives the "Automated Coaching" panel).
+      if (overallScore === 0) {
+          feedback.push("No activity recorded for this period yet — log your daily work to start tracking performance.");
+      } else {
+          if (productivity < 60) feedback.push("Productivity is below target. Aim to increase your daily throughput.");
+          if (quality < 60) feedback.push("Quality is low — make sure records and notes are complete and detailed.");
+          if (impact < 60) feedback.push("Impact is trending low. Focus on outcomes (assessments completed, people reached).");
+          if (productivity >= 90) feedback.push("Outstanding productivity — you're among the top performers this week.");
+          if (feedback.length === 0) feedback.push("Solid, well-balanced performance. Keep it up!");
       }
 
       // Real Trend Calculation (Last 3 days vs Prev 3 days)

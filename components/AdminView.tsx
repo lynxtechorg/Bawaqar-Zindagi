@@ -37,10 +37,22 @@ const AdminView: React.FC = () => {
       }
   };
 
+  const [deleteUserConfirm, setDeleteUserConfirm] = useState<{id: string, name: string} | null>(null);
+
   const handleReset = async (id: string) => {
-      const newPass = await resetUserPassword(id);
-      setResetInfo({ id, password: newPass });
-      setTimeout(() => setResetInfo(null), 10000); // Clear after 10s
+      try {
+          const newPass = await resetUserPassword(id);
+          setResetInfo({ id, password: newPass });
+          setTimeout(() => setResetInfo(null), 10000); // Clear after 10s
+      } catch (err: any) {
+          setError(err.message || "Password reset failed.");
+      }
+  };
+
+  const confirmDeleteUser = async () => {
+      if (!deleteUserConfirm) return;
+      await deleteUser(deleteUserConfirm.id);
+      setDeleteUserConfirm(null);
   };
 
   // Filter users: Don't show Master Admin. Sort by Org.
@@ -49,7 +61,7 @@ const AdminView: React.FC = () => {
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8 bg-slate-50 min-h-screen">
       {/* White Header Box */}
-      <div className="bg-white text-slate-800 p-8 rounded-2xl shadow-sm border border-slate-200 flex justify-between items-center">
+      <div className="card text-slate-800 p-8 flex justify-between items-center">
           <div>
               <h1 className="text-3xl font-bold flex items-center text-slate-900"><Shield className="mr-3 text-bwz-primary"/> Master Admin Console</h1>
               <p className="text-slate-500 mt-2">Universal Identity & Access Management</p>
@@ -62,7 +74,7 @@ const AdminView: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
           {/* Create User Form */}
-          <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow border border-slate-200 h-fit">
+          <div className="lg:col-span-1 card p-6 h-fit">
               <h2 className="font-bold text-lg mb-6 flex items-center text-slate-800"><UserPlus className="mr-2"/> Register New Employee</h2>
               
               <form onSubmit={handleCreate} className="space-y-4">
@@ -135,7 +147,7 @@ const AdminView: React.FC = () => {
           </div>
 
           {/* User List */}
-          <div className="lg:col-span-2 bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
+          <div className="lg:col-span-2 card overflow-hidden">
               <div className="p-6 border-b border-slate-100 bg-slate-50">
                   <h2 className="font-bold text-lg text-slate-800">Active Directory</h2>
               </div>
@@ -175,7 +187,7 @@ const AdminView: React.FC = () => {
                                     <button onClick={() => handleReset(u.id)} className="p-2 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded" title="Reset Password">
                                         <RefreshCw size={16} />
                                     </button>
-                                    <button onClick={() => deleteUser(u.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete User">
+                                    <button onClick={() => setDeleteUserConfirm({ id: u.id, name: u.name })} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete User">
                                         <Trash2 size={16} />
                                     </button>
                                 </td>
@@ -195,6 +207,28 @@ const AdminView: React.FC = () => {
               )}
           </div>
       </div>
+
+      {/* Delete User Confirmation */}
+      {deleteUserConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm animate-fade-in">
+                <h3 className="font-bold text-xl text-red-600 mb-2 flex items-center">
+                    <Trash2 className="mr-2" /> Delete Employee
+                </h3>
+                <p className="text-slate-600 mb-6">
+                    Permanently revoke access for <strong>{deleteUserConfirm.name}</strong>? They will no longer be able to log in.
+                </p>
+                <div className="flex space-x-3">
+                    <button onClick={confirmDeleteUser} className="flex-1 bg-red-600 text-white py-2 rounded-lg font-bold hover:bg-red-700 transition">
+                        Yes, Delete
+                    </button>
+                    <button onClick={() => setDeleteUserConfirm(null)} className="flex-1 bg-slate-200 text-slate-800 py-2 rounded-lg font-bold hover:bg-slate-300 transition">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
     </div>
   );
 };

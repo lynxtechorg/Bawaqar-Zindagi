@@ -1,125 +1,17 @@
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Bawaqar Zindagi (BWZ)</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              medical: {
-                50: '#f0f9ff',
-                100: '#e0f2fe',
-                500: '#0ea5e9',
-                600: '#0284c7',
-                900: '#0c4a6e',
-              },
-              bwz: {
-                primary: '#2c7a7b', // Teal for BWZ branding
-                accent: '#e6fffa'
-              }
-            }
-          }
-        }
-      }
-    </script>
-    <style>
-      /* PRINT / PDF GENERATION STYLES */
-      @media print {
-        @page { 
-            margin: 0; 
-            size: 80mm auto; /* 80mm roll paper */
-        }
-        
-        body { 
-            background: white !important; 
-            margin: 0 !important; 
-            padding: 0 !important; 
-            -webkit-print-color-adjust: exact !important; 
-            print-color-adjust: exact !important;
-            width: 80mm !important;
-        }
-
-        /* DEFAULT PRINT: Hide UI elements */
-        nav, footer, .no-print { display: none !important; }
-        
-        /* RECEIPT MODE: If a receipt is being printed, hide everything else */
-        body.printing-receipt #root > *:not(#receipt-portal) {
-            display: none !important;
-        }
-        
-        body.printing-receipt #receipt-portal {
-            display: block !important;
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 80mm !important;
-            height: auto;
-            visibility: visible !important;
-            padding: 0 !important;
-            margin: 0 !important;
-        }
-        
-        body.printing-receipt #receipt-content {
-            width: 100% !important;
-            margin: 0 !important;
-            padding: 5mm !important; /* Small padding for the content */
-            box-sizing: border-box !important;
-        }
-
-        /* REPORT MODE: Normal printing of the main view */
-        #root { height: auto !important; overflow: visible !important; }
-        main { overflow: visible !important; height: auto !important; }
-        
-        #report-container {
-            width: 100% !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: white !important;
-            overflow: visible !important;
-        }
-
-        .break-inside-avoid {
-            break-inside: avoid;
-            page-break-inside: avoid;
-            margin-bottom: 20px;
-            border: 1px solid #eee;
-        }
-      }
-
-      /* Animation Utilities */
-      .animate-fade-in { animation: fadeIn 0.5s ease-out; }
-      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-      .animate-spin-slow { animation: spin 3s linear infinite; }
-      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      
-      /* Receipt Styles */
-      .receipt-font { font-family: 'Courier New', Courier, monospace; }
-    </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@18.3.1",
-    "react/": "https://esm.sh/react@18.3.1/",
-    "react-dom": "https://esm.sh/react-dom@18.3.1",
-    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-    "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom",
-    "lucide-react": "https://esm.sh/lucide-react@0.344.0?external=react",
-    "html2canvas": "https://esm.sh/html2canvas@1.4.1",
-    "jspdf": "https://esm.sh/jspdf@2.5.1",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.3"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Spectral:wght@500;600;700&display=swap" rel="stylesheet" />
 </head>
   <body class="bg-gray-50 text-slate-800 antialiased h-full">
     <div id="root" class="h-full"></div>
     <div id="receipt-portal"></div>
   <script type="module" src="/index.tsx"></script>
-<!-- Updated 2026-06-14 -->
 </body>
 </html>

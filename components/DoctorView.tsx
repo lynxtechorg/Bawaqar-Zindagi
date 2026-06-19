@@ -1,6 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useData } from '../contexts/DataContext';
+import { useAuth } from '../contexts/AuthContext';
+import { toast } from '../lib/toast';
 import { PrescriptionItem, PatientStatus, DrugCategory } from '../types';
 import PatientDashboard from './PatientDashboard';
 import MHQoLAssessment from './MHQoLAssessment';
@@ -8,7 +10,8 @@ import { ArrowLeft, Stethoscope, AlertTriangle, FileText, Activity, Search, Plus
 
 const DoctorView: React.FC = () => {
   const { clients, inventory, addPrescription, updateClientStatus, getDrugSuggestions, addProgressNote, patientQueue, updateQueueStatus, removeFromQueue, addToQueue, prescriptions } = useData();
-  
+  const { currentUser } = useAuth();
+
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'notes' | 'prescribe' | 'qol'>('dashboard');
@@ -96,7 +99,7 @@ const DoctorView: React.FC = () => {
     if (!drug) return;
     
     if (drug.currentStock < rxForm.qty) {
-       alert(`CRITICAL: Stock Insufficient. Need ${rxForm.qty}, have ${drug.currentStock}.`);
+       toast.error(`Stock insufficient. Need ${rxForm.qty}, have ${drug.currentStock}.`);
        return;
     }
 
@@ -131,11 +134,11 @@ const DoctorView: React.FC = () => {
     
     // Validation
     if (rxType === 'Inventory' && currentPrescription.length === 0) {
-        alert("Please add at least one medication.");
+        toast.error("Please add at least one medication.");
         return;
     }
     if (rxType === 'Text' && !prescriptionText.trim()) {
-        alert("Please enter prescription details.");
+        toast.error("Please enter prescription details.");
         return;
     }
 
@@ -144,8 +147,8 @@ const DoctorView: React.FC = () => {
     const res = await addPrescription({
       id: `RX-${Date.now()}`, 
       clientId: selectedClient.id, 
-      clientName: selectedClient.name, 
-      doctorId: 'DOC-CURRENT', 
+      clientName: selectedClient.name,
+      doctorId: currentUser?.username || currentUser?.id || 'Unknown',
       date: new Date().toISOString(), 
       items: rxType === 'Inventory' ? currentPrescription : [], 
       status: 'Pending', 
@@ -155,13 +158,13 @@ const DoctorView: React.FC = () => {
     });
     
     if (res.success) {
-       alert('Prescription Transmitted. Inventory Locked.');
+       toast.success('Prescription transmitted to pharmacy.');
        setCurrentPrescription([]);
        setPrescriptionText('');
        setSpecialRisks('');
        setActiveTab('dashboard');
     } else {
-       alert(res.msg);
+       toast.error(res.msg);
     }
   };
 
@@ -176,7 +179,7 @@ const DoctorView: React.FC = () => {
           // Alert removed to reduce friction, maybe a toast? For now, just silent success or small indicator
       } catch (e) {
           setNoteInput(noteToSave); // Restore if failed
-          alert("Failed to save note. Please try again.");
+          toast.error("Failed to save note. Please try again.");
       }
     }
   };
@@ -303,7 +306,7 @@ const DoctorView: React.FC = () => {
                     </div>
 
                     {/* Patient Header */}
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center">
+                    <div className="card p-6 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center">
                         <div className="mb-4 md:mb-0">
                             <h1 className="text-2xl font-bold text-slate-800">{selectedClient.name}</h1>
                             <p className="text-sm text-slate-500">ID: {selectedClient.id} | Age: {selectedClient.age}</p>
@@ -332,7 +335,7 @@ const DoctorView: React.FC = () => {
 
                     {activeTab === 'notes' && (
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div className="col-span-1 bg-white p-6 rounded-xl shadow border border-slate-200 h-fit">
+                            <div className="col-span-1 card p-6 h-fit">
                                 <h3 className="font-bold text-lg mb-4 flex items-center"><Plus className="mr-2"/> Add Note</h3>
                                 <textarea className="w-full h-40 bg-white border border-slate-300 rounded p-3 mb-4 focus:ring-2 focus:ring-bwz-primary outline-none" placeholder="Enter clinical observations..." value={noteInput} onChange={e => setNoteInput(e.target.value)}></textarea>
                                 <button onClick={handleSaveNote} className="w-full bg-slate-800 text-white py-2 rounded font-bold">Save Note</button>
@@ -340,7 +343,7 @@ const DoctorView: React.FC = () => {
                             <div className="col-span-1 md:col-span-2 space-y-4">
                                 {selectedClient.progressNotes.length === 0 && <p className="text-slate-400 italic">No progress notes recorded.</p>}
                                 {selectedClient.progressNotes.slice().reverse().map(note => (
-                                <div key={note.id} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 relative">
+                                <div key={note.id} className="card p-6 relative">
                                     <div className="absolute top-4 right-4 text-xs text-slate-400 font-mono">{new Date(note.date).toLocaleString()}</div>
                                     <div className="flex items-center mb-2 text-bwz-primary font-bold"><StickyNote size={16} className="mr-2"/> {note.author}</div>
                                     <p className="text-slate-700 whitespace-pre-wrap">{note.note}</p>
@@ -351,7 +354,7 @@ const DoctorView: React.FC = () => {
                     )}
 
                     {activeTab === 'prescribe' && (
-                        <div className="bg-white p-6 rounded-xl shadow-lg border border-slate-200">
+                        <div className="card shadow-card p-6">
                             {/* HIGH-RISK PROTOCOLS DOCK (Upgrade 7) */}
                             {(selectedClient.riskProfile.suicidalIdeation || selectedClient.riskProfile.homicidalIntent) && (
                                 <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-5 animate-pulse-subtle">
@@ -460,7 +463,7 @@ const DoctorView: React.FC = () => {
                                                     });
                                                     setSelectedCategory(categoryToFind as any);
                                                 } else {
-                                                    alert(`No in-stock medications available in inventory matching category: ${categoryToFind}`);
+                                                    toast.error(`No in-stock medications matching: ${categoryToFind}`);
                                                 }
                                             }}
                                             className={`transition-all border text-left p-3 rounded-lg bg-white flex flex-col justify-between cursor-pointer ${tpl.color}`}
@@ -794,7 +797,7 @@ const DoctorView: React.FC = () => {
                             .map(client => {
                                 const queueStatus = patientQueue.find(q => q.patientId === client.id && q.status !== 'Completed')?.status;
                                 return (
-                                    <div key={client.id} onClick={() => handleSelectPatient(client.id)} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 cursor-pointer hover:shadow-lg transition-all group border-l-4 hover:border-l-bwz-primary relative overflow-hidden flex flex-col justify-between" style={{ borderLeftColor: client.status === PatientStatus.RELAPSE ? '#ef4444' : client.status === PatientStatus.NEW ? '#3b82f6' : client.status === PatientStatus.TERMINATED ? '#10b981' : undefined }}>
+                                    <div key={client.id} onClick={() => handleSelectPatient(client.id)} className="card p-6 cursor-pointer hover:shadow-lg transition-all group border-l-4 hover:border-l-bwz-primary relative overflow-hidden flex flex-col justify-between" style={{ borderLeftColor: client.status === PatientStatus.RELAPSE ? '#ef4444' : client.status === PatientStatus.NEW ? '#3b82f6' : client.status === PatientStatus.TERMINATED ? '#10b981' : undefined }}>
                                         {client.isLegacy && (
                                             <div className="absolute top-0 right-0 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-1 rounded-bl shadow-sm">
                                                 LEGACY

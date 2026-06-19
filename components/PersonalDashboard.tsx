@@ -27,7 +27,7 @@ const PersonalDashboard: React.FC = () => {
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8 bg-slate-50 min-h-screen">
       {/* Header Block */}
-      <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center relative overflow-hidden">
+      <div className="card p-8 flex flex-col md:flex-row justify-between items-center relative overflow-hidden">
         <div className="absolute top-0 right-0 p-10 opacity-5">
             <Award size={200} />
         </div>
@@ -60,21 +60,21 @@ const PersonalDashboard: React.FC = () => {
           {/* Detailed Metrics */}
           <div className="lg:col-span-2 space-y-8">
               <div className="grid grid-cols-3 gap-4">
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                  <div className="card p-6">
                       <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">Productivity</h4>
                       <div className="text-3xl font-bold text-slate-800">{performance.productivityScore}%</div>
                       <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
                           <div className="bg-blue-500 h-full rounded-full transition-all duration-1000" style={{ width: `${performance.productivityScore}%` }}></div>
                       </div>
                   </div>
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                  <div className="card p-6">
                       <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">Quality</h4>
                       <div className="text-3xl font-bold text-slate-800">{performance.qualityScore}%</div>
                       <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
                           <div className="bg-purple-500 h-full rounded-full transition-all duration-1000" style={{ width: `${performance.qualityScore}%` }}></div>
                       </div>
                   </div>
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                  <div className="card p-6">
                       <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">Impact</h4>
                       <div className="text-3xl font-bold text-slate-800">{performance.impactScore}%</div>
                       <div className="w-full bg-slate-100 h-1.5 mt-3 rounded-full overflow-hidden">
@@ -84,7 +84,7 @@ const PersonalDashboard: React.FC = () => {
               </div>
 
               {/* History Chart */}
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="card p-6">
                   <h3 className="font-bold text-slate-800 mb-6 flex items-center"><Activity className="mr-2 text-bwz-primary"/> Performance Velocity</h3>
                   <div className="h-64">
                       <ResponsiveContainer width="100%" height="100%">
@@ -108,7 +108,7 @@ const PersonalDashboard: React.FC = () => {
           {/* Right Column: Badges & Feedback */}
           <div className="space-y-8">
               {/* Badges */}
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="card p-6">
                   <h3 className="font-bold text-slate-800 mb-4 flex items-center"><Award className="mr-2 text-yellow-500"/> Achievements</h3>
                   {performance.badges.length === 0 ? (
                       <p className="text-slate-400 text-sm italic text-center py-4">No badges earned yet. Keep pushing!</p>
@@ -128,7 +128,7 @@ const PersonalDashboard: React.FC = () => {
               </div>
 
               {/* Feedback */}
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="card p-6">
                   <h3 className="font-bold text-slate-800 mb-4 flex items-center"><Zap className="mr-2 text-blue-500"/> Automated Coaching</h3>
                   <div className="space-y-3">
                       {performance.actionableFeedback.map((fb, i) => (

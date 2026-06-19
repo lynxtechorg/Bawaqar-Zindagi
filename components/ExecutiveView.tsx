@@ -2,7 +2,8 @@
 import React, { useState, useMemo } from 'react';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
-import { 
+import { toast } from '../lib/toast';
+import {
   AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, 
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart 
 } from 'recharts';
@@ -155,15 +156,17 @@ const ExecutiveView: React.FC = () => {
         case 'FINANCE_REVENUE':
             chartType = 'AREA';
             summary.title = 'Pharmacy Revenue Stream';
-            const revGroup = prescriptions.filter(p => filterByDate(p.date)).reduce((acc, p) => {
+            // Revenue is only realised once a prescription is actually dispensed.
+            const dispensedRx = prescriptions.filter(p => p.status === 'Dispensed' && filterByDate(p.date));
+            const revGroup = dispensedRx.reduce((acc, p) => {
                  const d = new Date(p.date).toLocaleString('default', { month: 'short', year: '2-digit' });
                  acc[d] = (acc[d] || 0) + Math.round(p.totalCost);
                  return acc;
             }, {} as Record<string, number>);
             rawData = Object.entries(revGroup).map(([name, value]) => ({ name, value }));
-            const totalRev = prescriptions.filter(p => filterByDate(p.date)).reduce((a,b) => a + Math.round(b.totalCost), 0);
+            const totalRev = dispensedRx.reduce((a,b) => a + Math.round(b.totalCost), 0);
             summary.value = `PKR ${totalRev.toLocaleString()}`;
-            summary.insight = "Gross revenue generated from pharmacy dispensations.";
+            summary.insight = "Gross revenue from dispensed pharmacy prescriptions.";
             columns = [{key: 'name', label: 'Month'}, {key: 'value', label: 'Revenue (PKR)'}];
             break;
 
@@ -192,7 +195,7 @@ const ExecutiveView: React.FC = () => {
                  return acc;
             }, {} as Record<string, number>);
             rawData = Object.entries(medicineQtyGroup).map(([name, value]) => ({ name, value }));
-            const medTotalQty = Object.values(medicineQtyGroup).reduce((a,b) => a + b, 0);
+            const medTotalQty = (Object.values(medicineQtyGroup) as number[]).reduce((a,b) => a + b, 0);
             summary.value = `${medTotalQty.toLocaleString()} Units`;
             summary.insight = "Quantity of drugs dispensed to patients over the selected period.";
             columns = [{key: 'name', label: 'Medicine Name'}, {key: 'value', label: 'Quantity Dispensed'}];
@@ -334,7 +337,7 @@ const ExecutiveView: React.FC = () => {
     csvContent += `Date Filter: ${dateRange}\r\n\r\n`;
     
     Array.from(selectedMetrics).forEach(metricId => {
-        const data = generateChartData(metricId);
+        const data = generateChartData(metricId as MetricID);
         if (data.rawData.length === 0) return;
         
         csvContent += `SECTION: ${data.summary.title.toUpperCase()}\r\n`;
@@ -410,7 +413,7 @@ const ExecutiveView: React.FC = () => {
         pdf.save(`${organization}_Executive_Report_${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err) {
         console.error("PDF Generation Error", err);
-        alert("Failed to generate PDF. Please try printing to PDF instead.");
+        toast.error("Failed to generate PDF. Please try printing to PDF instead.");
     } finally {
         setIsGeneratingPDF(false);
     }
@@ -552,7 +555,7 @@ const ExecutiveView: React.FC = () => {
                       if (data.rawData.length === 0) return null; // Skip empty
                       
                       return (
-                        <div key={metricId} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 break-inside-avoid print:shadow-none print:border-none print:p-0 print:mb-10">
+                        <div key={metricId} className="card p-8 break-inside-avoid print:shadow-none print:border-none print:p-0 print:mb-10">
                             {/* Section Header */}
                             <div className="flex justify-between items-end mb-6 border-b pb-4">
                                 <div>

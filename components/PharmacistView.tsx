@@ -4,12 +4,13 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useData } from '../contexts/DataContext';
 import { useAuth } from '../contexts/AuthContext';
+import { toast } from '../lib/toast';
 import { Drug, DrugCategory, Prescription } from '../types';
 import { Package, AlertTriangle, Search, Activity, Archive, DollarSign, Edit, Trash, Trash2, Plus, Printer, FileText, Star, CheckSquare, MessageSquare, MapPin, X, Receipt } from 'lucide-react';
 
 const PharmacistView: React.FC = () => {
   const { organization, currentUser } = useAuth();
-  const { prescriptions, dispensePrescription, inventory, getAlerts, restockInventory, manageInventory, getInventoryValuation, dispenseLogs, addPharmacyFeedback } = useData();
+  const { prescriptions, dispensePrescription, inventory, getAlerts, restockInventory, manageInventory, getInventoryValuation, dispenseLogs, addPharmacyFeedback, refreshData } = useData();
   const [activeTab, setActiveTab] = useState<'queue' | 'inventory' | 'logs'>('queue');
   
   // Inventory Form State
@@ -80,7 +81,7 @@ const PharmacistView: React.FC = () => {
     await manageInventory(isEditing ? 'UPDATE' : 'ADD', newDrug);
     setDrugForm({ name: '', molecule: '', category: 'Supplement/General', strength: '', brand: '', currentStock: 0, reorderLevel: 50, unit: 'tablets', packetCost: 0, unitsPerPacket: 10, costPerUnit: 0, tags: [], manufacturer: '', rackLocation: '', formulation: 'Tablet', expiryDate: '' });
     setIsEditing(false);
-    alert('Inventory Updated Successfully');
+    toast.success('Inventory updated.');
   };
 
   const handleEdit = (drug: Drug) => {
@@ -209,12 +210,13 @@ const PharmacistView: React.FC = () => {
 
       const res = await dispensePrescription(feedbackRx.id);
       if (res.success) {
-        if(res.alerts.length) console.warn(`Dispensed with Alerts: ${res.alerts.join(', ')}`);
+        toast.success(`Dispensed to ${feedbackRx.clientName}.`);
+        if (res.alerts.length) toast.info(res.alerts.join(' · '));
         // Auto open print dialog after dispense
         const updatedRx = { ...feedbackRx, status: 'Dispensed' as const };
         initiatePrint(updatedRx);
       } else {
-        console.error(`Failed: ${res.alerts.join(', ')}`);
+        toast.error(`Dispense failed: ${res.alerts.join(', ')}`);
       }
 
       setShowFeedbackModal(false);
@@ -224,18 +226,18 @@ const PharmacistView: React.FC = () => {
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-6 h-auto min-h-[calc(100vh-80px)] md:h-[calc(100vh-80px)] md:overflow-y-auto">
       {/* Tab Nav & Stats */}
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0 no-print">
-         <div className="flex flex-wrap gap-2 justify-center">
-            <button onClick={() => setActiveTab('queue')} className={`px-4 md:px-6 py-2 rounded-lg font-bold text-sm md:text-base ${activeTab === 'queue' ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600'}`}>Dispensing Queue</button>
-            <button onClick={() => setActiveTab('inventory')} className={`px-4 md:px-6 py-2 rounded-lg font-bold text-sm md:text-base ${activeTab === 'inventory' ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600'}`}>Inventory Master</button>
-            <button onClick={() => setActiveTab('logs')} className={`px-4 md:px-6 py-2 rounded-lg font-bold text-sm md:text-base ${activeTab === 'logs' ? 'bg-orange-600 text-white' : 'bg-slate-100 text-slate-600'}`}>Dispense Logs</button>
+      <div className="card p-3 flex flex-col md:flex-row justify-between items-center gap-4 no-print">
+         <div className="bg-slate-100 rounded-xl p-1 flex flex-wrap gap-1">
+            {([['queue','Dispensing Queue'],['inventory','Inventory Master'],['logs','Dispense Logs']] as const).map(([id,label]) => (
+              <button key={id} onClick={() => setActiveTab(id)} className={`px-4 py-2 rounded-lg font-semibold text-sm transition-all ${activeTab === id ? 'bg-white text-slate-900 shadow-soft' : 'text-slate-500 hover:text-slate-700'}`}>{label}</button>
+            ))}
          </div>
-         <div className="flex items-center space-x-4">
+         <div className="flex items-center gap-3 pr-1">
             <div className="text-right">
-              <p className="text-xs text-slate-500 uppercase font-bold">Total Assets</p>
+              <p className="text-[11px] text-slate-400 uppercase font-semibold tracking-wide">Total Assets</p>
               <p className="text-lg md:text-xl font-mono font-bold text-slate-800">PKR {valuation.toLocaleString()}</p>
             </div>
-            {alerts.length > 0 && <div className="bg-red-100 text-red-600 px-3 py-1 rounded-full text-xs font-bold animate-pulse">{alerts.length} Alerts</div>}
+            {alerts.length > 0 && <span className="badge bg-amber-100 text-amber-700">{alerts.length} alerts</span>}
          </div>
       </div>
 
@@ -243,7 +245,7 @@ const PharmacistView: React.FC = () => {
         <div className="grid grid-cols-1 gap-6">
              <div className="flex justify-between items-center no-print">
                 <h2 className="font-bold text-lg text-slate-700">Pending Prescriptions</h2>
-                <button onClick={() => window.location.reload()} className="text-xs text-slate-500 hover:text-orange-600 flex items-center">
+                <button onClick={() => refreshData()} className="text-xs text-slate-500 hover:text-orange-600 flex items-center">
                     <Activity size={12} className="mr-1"/> Refresh Queue
                 </button>
              </div>
@@ -251,7 +253,7 @@ const PharmacistView: React.FC = () => {
              {prescriptions.filter(p => p.status === 'Pending').map(rx => {
                const isTextRx = rx.items.length === 0;
                return (
-               <div key={rx.id} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center print-card">
+               <div key={rx.id} className="card p-6 flex flex-col md:flex-row justify-between items-start md:items-center print-card">
                  <div className="w-full">
                    <div className="flex justify-between items-center mb-4 border-b pb-2">
                         <h3 className="font-bold text-xl text-slate-800">{rx.clientName} <span className="text-sm font-normal text-slate-500">({rx.clientId})</span></h3>
@@ -451,7 +453,7 @@ const PharmacistView: React.FC = () => {
 
       {activeTab === 'inventory' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-fit order-2 lg:order-1">
+          <div className="lg:col-span-1 card p-6 h-fit order-2 lg:order-1">
              <h2 className="font-bold text-lg mb-4 flex items-center text-orange-700"><Plus className="mr-2"/> {isEditing ? 'Edit Drug' : 'Add New Drug'}</h2>
              <form onSubmit={handleSaveDrug} className="space-y-3">
                 <input required placeholder="Drug Name" className="w-full border rounded p-2 bg-white" value={drugForm.name} onChange={e => setDrugForm({...drugForm, name: e.target.value})} />
@@ -521,7 +523,7 @@ const PharmacistView: React.FC = () => {
              </form>
           </div>
 
-          <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden order-1 lg:order-2">
+          <div className="lg:col-span-2 card overflow-hidden order-1 lg:order-2">
              <div className="overflow-x-auto">
              <table className="w-full text-left text-sm min-w-[600px]">
                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
@@ -578,7 +580,7 @@ const PharmacistView: React.FC = () => {
       )}
 
       {activeTab === 'logs' && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-6">
+          <div className="card p-4 md:p-6">
               <div className="flex flex-col md:flex-row justify-between items-center mb-6 space-y-4 md:space-y-0">
                   <h2 className="font-bold text-lg text-slate-700 flex items-center"><FileText className="mr-2"/> Dispensing History Log</h2>
                   <input className="border p-2 rounded w-full md:w-64 text-sm" placeholder="Filter by Drug or Patient..." value={logFilter} onChange={e => setLogFilter(e.target.value)} />
