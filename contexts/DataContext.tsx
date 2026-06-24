@@ -143,7 +143,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // Lightweight refetchers used by the realtime subscription and the reconcile tick.
   const refetchQueue = () => {
       if (!organization) return;
+      // IMPORTANT: order newest-first and cap the result. PostgREST returns at most
+      // 1000 rows by default; patient_queue is append-only (it is never pruned, only
+      // hidden by the client-side "today" filter), so once it exceeds 1000 rows an
+      // unordered fetch returns the OLDEST 1000 and silently drops every recent
+      // check-in. Ordering by id (Q-<timestamp>) descending keeps today's rows in view.
       supabase.from('patient_queue').select('*').eq('organization', organization)
+          .order('id', { ascending: false }).limit(500)
           .then(({ data }) => { if (data) setAllQueue(data as any); });
   };
   const refetchPrescriptions = () => {
@@ -174,7 +180,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const [inv, rx, q, sess, feed, logs] = await Promise.all([
             supabase.from('drug_inventory').select('*').eq('organization', organization),
             supabase.from('prescriptions').select('*').eq('organization', organization),
-            supabase.from('patient_queue').select('*').eq('organization', organization),
+            // Newest-first + limit: avoids PostgREST's 1000-row cap dropping recent
+            // check-ins once the append-only queue table grows past 1000 rows.
+            supabase.from('patient_queue').select('*').eq('organization', organization).order('id', { ascending: false }).limit(500),
             supabase.from('outreach_sessions').select('*').eq('organization', organization),
             supabase.from('pharmacy_feedbacks').select('*').eq('organization', organization),
             supabase.from('dispense_logs').select('*').eq('organization', organization),
